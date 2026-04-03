@@ -1,0 +1,11 @@
+# Ignore the secret keys
+.env
+
+# Ignore your personal database and uploads (don't upload your real receipts!)
+inventory.db
+static/uploads/
+temp_*/
+
+# Ignore Python cache files
+__pycache__/
+*.pyc
