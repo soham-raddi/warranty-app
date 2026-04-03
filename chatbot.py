@@ -6,13 +6,12 @@ import os
 load_dotenv()
 API_KEY = os.getenv("GEMINI_API_KEY") 
 
-# Initialize the new Client
 client = genai.Client(api_key=API_KEY)
 
 def ask_digital_twin(user_message, chat_history):
     columns, rows = get_all_appliances()
     
-    # NEW: Get the exact current date so the AI can do warranty math!
+    #get today's date for warranty calculations
     today = datetime.date.today().strftime("%B %d, %Y")
     
     db_context = "User's current inventory:\n"
@@ -52,5 +51,4 @@ def ask_digital_twin(user_message, chat_history):
         )
         return response.text
     except Exception as e:
-        # This will show up in the chat window if something crashes!
         return f"System Alert: I encountered a connection error. ({str(e)})"

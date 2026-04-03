@@ -5,11 +5,9 @@ from dotenv import load_dotenv
 import PIL.Image
 
 load_dotenv()
-# Put your actual API key here!
-# This grabs the key securely
+
 API_KEY = os.getenv("GEMINI_API_KEY") 
 
-# Initialize the new Client
 client = genai.Client(api_key=API_KEY)
 
 def parse_receipt_image_to_json(image_path):

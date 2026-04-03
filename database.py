@@ -29,7 +29,7 @@ def save_receipt_to_db(data):
         data.get("category"), data.get("date_of_purchase"), data.get("price"),
         data.get("tax_amount"), data.get("total_amount"), data.get("payment_method"),
         data.get("store_name"), data.get("store_contact"), data.get("warranty_info"), 
-        data.get("return_policy"), data.get("file_path") # <-- NEW FIELD
+        data.get("return_policy"), data.get("file_path")
     ))
     conn.commit()
     return True
