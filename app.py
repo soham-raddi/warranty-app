@@ -7,7 +7,6 @@ from chatbot import ask_digital_twin
 
 app = Flask(__name__)
 
-# Configure the upload folder to be inside 'static' so the browser can display the images
 app.config['UPLOAD_FOLDER'] = 'static/uploads'
 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 
@@ -32,7 +31,7 @@ def upload_file():
         
         extracted_data = parse_receipt_image_to_json(filepath)
         
-        # --- NEW: Catch the Mountain Photo! ---
+        # --- check for reciepts ---
         if extracted_data.get("error") == "NOT_A_RECEIPT":
             os.remove(filepath) # Delete the bad image
             return jsonify({'error': 'This image does not look like a valid receipt or bill.'}), 400
