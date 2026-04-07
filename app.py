@@ -2,7 +2,7 @@ from flask import Flask, render_template, request, jsonify
 import os
 from werkzeug.utils import secure_filename
 from llm_extractor import parse_receipt_image_to_json
-from database import save_receipt_to_db, get_all_appliances
+from database import save_receipt_to_db, get_all_appliances, delete_appliance
 from chatbot import ask_digital_twin
 
 app = Flask(__name__)
@@ -64,6 +64,17 @@ def chat():
     # Pass the message and history to our AI engine
     reply = ask_digital_twin(user_msg, history)
     return jsonify({'reply': reply})
+
+@app.route('/api/delete/<int:item_id>', methods=['DELETE'])
+def delete_item(item_id):
+    # 1. Delete from Database and get the file path
+    file_path = delete_appliance(item_id)
+    
+    # 2. Delete the actual image file from the 'static/uploads' folder
+    if file_path and os.path.exists(file_path):
+        os.remove(file_path)
+        
+    return jsonify({'message': 'Item and image deleted successfully'})
 
 # This is the crucial block that tells Flask to actively run the server!
 if __name__ == '__main__':

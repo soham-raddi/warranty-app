@@ -109,7 +109,7 @@
                             <div class="msg-ai">Hello! I am your Digital Twin Assistant. Ask me about your inventory, warranties, or past purchases! I can even calculate total spending for you.</div>
                         </div>
                         <div class="input-group">
-                            <input type="text" id="chatInput" class="form-control" placeholder="E.g., Is my kettle still under warranty?">
+                            <input type="text" id="chatInput" class="form-control" placeholder="E.g., 'What appliances do I have under warranty?'">
                             <button class="btn btn-primary" onclick="sendMessage()" id="sendBtn"><i class="bi bi-send"></i> Send</button>
                         </div>
                     </div>
@@ -173,36 +173,54 @@
         const tbody = document.getElementById('inventoryTableBody');
         tbody.innerHTML = '<tr><td colspan="7" class="text-center">Loading data...</td></tr>';
         
-        try {
-            const response = await fetch('/api/inventory');
-            const data = await response.json();
-            
-            if(data.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="7" class="text-center">No receipts uploaded yet.</td></tr>';
-                return;
-            }
+        const response = await fetch('/api/inventory');
+        const data = await response.json();
+        
+        if(data.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="7" class="text-center">No receipts uploaded yet.</td></tr>';
+            return;
+        }
 
-            tbody.innerHTML = '';
-            data.forEach(row => {
-                // View button logic handles the file paths correctly
-                const viewButton = row.file_path 
-                    ? `<a href="/${row.file_path}" target="_blank" class="btn btn-sm btn-outline-primary"><i class="bi bi-image"></i> View Receipt</a>` 
-                    : '<span class="text-muted small">No Image</span>';
+        tbody.innerHTML = '';
+        data.forEach(row => {
+            // We use row.id now to identify which item to delete
+            const actions = row.file_path ? `
+                <div class="btn-group" role="group">
+                    <a href="/${row.file_path}" download class="btn btn-sm btn-outline-success" title="Download Image">
+                        <i class="bi bi-download"></i>
+                    </a>
+                    <a href="/${row.file_path}" target="_blank" class="btn btn-sm btn-outline-primary" title="View Image">
+                        <i class="bi bi-eye"></i>
+                    </a>
+                    <button class="btn btn-sm btn-outline-danger" onclick="deleteItem(${row.id})" title="Delete Record">
+                        <i class="bi bi-trash"></i>
+                    </button>
+                </div>
+            ` : `<button class="btn btn-sm btn-outline-danger" onclick="deleteItem(${row.id})"><i class="bi bi-trash"></i></button>`;
 
-                tbody.innerHTML += `
-                    <tr>
-                        <td class="fw-bold">${row.item_name || 'N/A'}<br><small class="text-muted fw-normal">${row.brand || ''}</small></td>
-                        <td><span class="badge bg-secondary">${row.category || 'N/A'}</span></td>
-                        <td>${row.date_of_purchase || 'N/A'}</td>
-                        <td>${row.total_amount || 'N/A'}</td>
-                        <td>${row.store_name || 'N/A'}</td>
-                        <td>${row.warranty_info || 'N/A'}</td>
-                        <td>${viewButton}</td>
-                    </tr>
-                `;
-            });
-        } catch (err) {
-            tbody.innerHTML = '<tr><td colspan="7" class="text-center text-danger">Failed to load inventory.</td></tr>';
+            tbody.innerHTML += `
+                <tr>
+                    <td class="fw-bold">${row.item_name || 'N/A'}<br><small class="text-muted fw-normal">${row.brand || ''}</small></td>
+                    <td><span class="badge bg-secondary">${row.category || 'N/A'}</span></td>
+                    <td>${row.date_of_purchase || 'N/A'}</td>
+                    <td>${row.total_amount || 'N/A'}</td>
+                    <td>${row.store_name || 'N/A'}</td>
+                    <td>${row.warranty_info || 'N/A'}</td>
+                    <td>${actions}</td>
+                </tr>
+            `;
+        });
+    }
+
+    // NEW: Function to handle deletion
+    async function deleteItem(id) {
+        if (!confirm("Are you sure you want to delete this record and its image?")) return;
+
+        const response = await fetch(`/api/delete/${id}`, { method: 'DELETE' });
+        if (response.ok) {
+            loadInventory(); // Refresh the table
+        } else {
+            alert("Failed to delete the item.");
         }
     }
 
