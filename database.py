@@ -39,3 +39,16 @@ def get_all_appliances():
     rows = cursor.fetchall()
     columns = [description[0] for description in cursor.description]
     return columns, rows
+
+def delete_appliance(item_id):
+    """Deletes a record by its ID and returns the file path so we can delete the image too."""
+    # First, get the file path so we don't leave 'orphan' images on the drive
+    cursor.execute('SELECT file_path FROM appliances_v4 WHERE id = ?', (item_id,))
+    row = cursor.fetchone()
+    file_path = row[0] if row else None
+    
+    # Delete from DB
+    cursor.execute('DELETE FROM appliances_v4 WHERE id = ?', (item_id,))
+    conn.commit()
+    
+    return file_path
