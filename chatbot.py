@@ -71,6 +71,22 @@ def ask_digital_twin(user_message, chat_history):
 
     target_model = "llama-3.3-70b-versatile"
     target_item = find_item_fuzzy(user_message.lower(), items)
+    action = None
+
+    if target_item and int(target_item.get('has_warranty_card') or 0) == 0:
+        action = {
+            "type": "attach_warranty_card",
+            "item_id": target_item.get('id'),
+            "item_name": target_item.get('item_name') or "this item"
+        }
+    elif any(k in user_message.lower() for k in ["warranty card", "attach card", "missing card"]):
+        first_missing = next((i for i in items if int(i.get('has_warranty_card') or 0) == 0), None)
+        if first_missing:
+            action = {
+                "type": "attach_warranty_card",
+                "item_id": first_missing.get('id'),
+                "item_name": first_missing.get('item_name') or "this item"
+            }
     
     if target_item and target_item.get('file_path') and os.path.exists(target_item['file_path']):
         try:
@@ -97,7 +113,14 @@ def ask_digital_twin(user_message, chat_history):
             messages=messages,
             temperature=0.5
         )
-        return chat_completion.choices[0].message.content
+        reply = chat_completion.choices[0].message.content
+        return {
+            "reply": reply,
+            "action": action
+        }
     except Exception as e:
         print(f"Groq Error: {e}")
-        return "I'm having trouble connecting right now."
+        return {
+            "reply": "I'm having trouble connecting right now.",
+            "action": action
+        }

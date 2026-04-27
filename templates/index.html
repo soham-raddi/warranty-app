@@ -6,18 +6,7 @@
     <title>Digital Twin | Smart Inventory</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.5/font/bootstrap-icons.css">
-    <style>
-        body { background-color: #f0f2f5; font-family: 'Segoe UI', sans-serif; }
-        .nav-pills .nav-link { color: #555; font-weight: 500; transition: 0.3s; }
-        .nav-pills .nav-link.active { background-color: #0d6efd; border-radius: 8px; }
-        .stat-card { border: none; border-radius: 15px; color: white; position: relative; overflow: hidden; }
-        .stat-card i { position: absolute; right: 15px; bottom: 10px; font-size: 3rem; opacity: 0.2; }
-        #chat-box { height: 450px; overflow-y: auto; background: #fff; border-radius: 10px; padding: 20px; border: 1px solid #ddd; }
-        .msg-user { background: #0d6efd; color: #fff; padding: 10px 15px; border-radius: 15px 15px 0 15px; margin-bottom: 10px; margin-left: auto; width: fit-content; max-width: 80%; }
-        .msg-ai { background: #e9ecef; color: #333; padding: 10px 15px; border-radius: 15px 15px 15px 0; margin-bottom: 10px; width: fit-content; max-width: 80%; }
-        .item-link { color: inherit; text-decoration: none; transition: color 0.2s; cursor: pointer; }
-        .item-link:hover { color: #0d6efd; }
-    </style>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/index.css') }}">
 </head>
 <body>
 
@@ -92,14 +81,38 @@
         </div>
 
         <div class="tab-pane fade" id="tab-chat">
-            <div class="card shadow-sm mx-auto" style="max-width: 800px;">
-                <div id="chat-box">
-                    <div class="msg-ai">Welcome back! How can I help you with your inventory today?</div>
-                </div>
-                <div class="card-footer bg-white border-top-0 p-3">
-                    <div class="input-group">
-                        <input type="text" id="chatInput" class="form-control" placeholder="Ask about spending or items..." onkeypress="if(event.key==='Enter') sendMessage()">
-                        <button class="btn btn-primary" onclick="sendMessage()"><i class="bi bi-send"></i></button>
+            <div class="mx-auto chat-layout" style="max-width: 1180px;">
+                <aside class="chat-sidebar shadow-sm">
+                    <div class="sidebar-title"><i class="bi bi-clock-history"></i> Recent Conversations</div>
+                    <div class="sidebar-subtitle">Grouped by date</div>
+                    <div id="recentConversations"></div>
+                </aside>
+
+                <div class="chat-shell shadow-sm">
+                    <div class="chat-topbar">
+                        <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-2">
+                            <div>
+                                <div class="chat-title"><i class="bi bi-stars"></i> Smart Assistant</div>
+                                <div class="chat-subtitle">Chat history is saved and searchable</div>
+                            </div>
+                            <div class="chat-controls d-flex gap-2">
+                                <button class="btn btn-outline-danger btn-sm" onclick="clearChatHistory()"><i class="bi bi-trash3"></i> Clear History</button>
+                            </div>
+                        </div>
+                        <div class="input-group input-group-sm">
+                            <input type="text" id="chatSearchInput" class="form-control chat-search-input" placeholder="Search in chat history..." onkeypress="if(event.key==='Enter') searchChatHistory()">
+                            <button class="btn btn-outline-secondary" onclick="searchChatHistory()"><i class="bi bi-search"></i></button>
+                            <button class="btn btn-outline-secondary" onclick="resetChatSearch()"><i class="bi bi-x-circle"></i></button>
+                        </div>
+                    </div>
+                    <div id="chat-box">
+                        <div class="msg-wrap assistant"><div class="msg-ai">Loading your previous chats...</div></div>
+                    </div>
+                    <div class="chat-input-area">
+                        <div class="input-group">
+                            <input type="text" id="chatInput" class="form-control" placeholder="Ask about spending or items..." onkeypress="if(event.key==='Enter') sendMessage()">
+                            <button class="btn btn-primary" onclick="sendMessage()"><i class="bi bi-send"></i></button>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -135,124 +148,7 @@
   </div>
 </div>
 
-<script>
-    async function uploadReceipt() {
-        const file = document.getElementById('receiptFile').files[0];
-        if(!file) return alert("Select a file!");
-        
-        const btn = document.getElementById('upBtn');
-        const loader = document.getElementById('upLoader');
-        btn.disabled = true; loader.classList.remove('d-none');
-
-        const formData = new FormData();
-        formData.append('receipt_image', file);
-
-        try {
-            const res = await fetch('/upload', { method: 'POST', body: formData });
-            const data = await res.json();
-            
-            if(res.ok) {
-                loadInventory(); 
-                
-                // Populate the new Rich Modal Data
-                document.getElementById('modalItemName').innerText = data.item_name || 'N/A';
-                document.getElementById('modalCategory').innerText = data.category || 'N/A';
-                document.getElementById('modalStore').innerText = data.store_name || 'N/A';
-                document.getElementById('modalDate').innerText = data.date_of_purchase || 'N/A';
-                document.getElementById('modalInvoice').innerText = data.invoice_number || 'N/A';
-                document.getElementById('modalWarranty').innerText = data.warranty_info || 'Not specified on receipt';
-                document.getElementById('modalPrice').innerText = data.total_amount || '0';
-
-                const summaryModal = new bootstrap.Modal(document.getElementById('summaryModal'));
-                summaryModal.show();
-                
-                document.getElementById('receiptFile').value = "";
-            }
-            else {
-                alert("Error: " + data.error);
-            }
-        } catch(e) { 
-            alert("Upload failed. Make sure the server is running."); 
-        }
-        finally { 
-            btn.disabled = false; loader.classList.add('d-none'); 
-        }
-    }
-
-    async function loadInventory() {
-        const tbody = document.getElementById('invTable');
-        tbody.innerHTML = '<tr><td colspan="6" class="text-center p-5">Loading digital twin data...</td></tr>';
-        
-        try {
-            const res = await fetch('/api/inventory');
-            const data = await res.json();
-
-            document.getElementById('s-tot').innerText = `₹${data.total_spent || 0}`;
-            document.getElementById('s-act').innerText = data.active_warranties || 0;
-
-            if(!data.items || data.items.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="6" class="text-center p-5 text-muted">No items found.</td></tr>';
-                return;
-            }
-
-            tbody.innerHTML = data.items.map(i => `
-                <tr>
-                    <td class="ps-4">
-                        <a href="/${i.file_path}" target="_blank" class="item-link" title="Click to view receipt">
-                            <strong>${i.item_name}</strong><br>
-                            <small class="text-muted">${i.brand}</small>
-                        </a>
-                    </td>
-                    <td><span class="badge bg-light text-dark border">${i.category || 'N/A'}</span></td>
-                    <td>${i.date_of_purchase}</td>
-                    <td class="fw-bold">₹${i.total_amount}</td>
-                    <td><span class="badge ${i.warranty_status==='Active'?'bg-success':'bg-danger'}">${i.warranty_status}</span></td>
-                    <td class="text-end pe-4">
-                        <div class="btn-group">
-                            <a href="/${i.file_path}" download class="btn btn-sm btn-outline-secondary" title="Download Image"><i class="bi bi-download"></i></a>
-                            <button onclick="delItem(${i.id})" class="btn btn-sm btn-outline-danger" title="Delete Record"><i class="bi bi-trash"></i></button>
-                        </div>
-                    </td>
-                </tr>
-            `).join('');
-        } catch(e) {
-            tbody.innerHTML = '<tr><td colspan="6" class="text-center text-danger p-5 text-muted">Failed to connect to database.</td></tr>';
-        }
-    }
-
-    async function delItem(id) {
-        if(!confirm("Delete this record permanently?")) return;
-        const res = await fetch(`/api/delete/${id}`, { method: 'DELETE' });
-        if(res.ok) loadInventory();
-    }
-
-    let chatHistory = [];
-    async function sendMessage() {
-        const input = document.getElementById('chatInput');
-        const box = document.getElementById('chat-box');
-        const msg = input.value.trim();
-        if(!msg) return;
-
-        box.innerHTML += `<div class="msg-user">${msg}</div>`;
-        input.value = "";
-        box.scrollTop = box.scrollHeight;
-
-        try {
-            const res = await fetch('/api/chat', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ message: msg, history: chatHistory })
-            });
-            const data = await res.json();
-            box.innerHTML += `<div class="msg-ai">${data.reply.replace(/\n/g, '<br>')}</div>`;
-            chatHistory.push({role: 'user', content: msg}, {role: 'assistant', content: data.reply});
-        } catch(e) { box.innerHTML += `<div class="msg-ai text-danger">Connection error.</div>`; }
-        box.scrollTop = box.scrollHeight;
-    }
-    
-    window.onload = loadInventory;
-</script>
-
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+<script src="{{ url_for('static', filename='js/index.js') }}"></script>
 </body>
 </html>
