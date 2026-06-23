@@ -1,0 +1,50 @@
+{% extends 'base.html' %}
+
+{% block title %}Assistant | Digital Twin{% endblock %}
+
+{% block content %}
+<section class="page-hero mb-4">
+    <h1 class="page-title">AI Assistant</h1>
+    <p class="page-subtitle">Every refresh opens a new conversation. Old conversations stay in the sidebar history.</p>
+</section>
+
+<div class="chat-layout">
+    <aside class="chat-sidebar shadow-sm">
+        <div class="sidebar-title"><i class="bi bi-clock-history"></i> Conversation History</div>
+        <div class="sidebar-subtitle">Grouped by date</div>
+        <div id="recentConversations"></div>
+        <div class="d-flex justify-content-between align-items-center gap-2 mt-3 pt-2 border-top">
+            <button class="btn btn-outline-primary btn-sm" onclick="startNewConversation()"><i class="bi bi-plus-circle"></i> New Conversation</button>
+            <button class="btn btn-outline-danger btn-sm" onclick="clearChatHistory()"><i class="bi bi-trash3"></i> Clear All</button>
+        </div>
+    </aside>
+
+    <div class="chat-shell shadow-sm">
+        <div class="chat-topbar">
+            <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-2">
+                <div>
+                    <div class="chat-title"><i class="bi bi-stars"></i> Smart Assistant</div>
+                    <div class="chat-subtitle">Start a fresh thread anytime or continue a saved conversation</div>
+                </div>
+                <div class="chat-controls d-flex gap-2">
+                    <button class="btn btn-outline-primary btn-sm" onclick="startNewConversation()"><i class="bi bi-plus-circle"></i> New Conversation</button>
+                </div>
+            </div>
+            <div class="input-group input-group-sm">
+                <input type="text" id="chatSearchInput" class="form-control chat-search-input" placeholder="Search conversations..." onkeypress="if(event.key==='Enter') searchChatHistory()">
+                <button class="btn btn-outline-secondary" onclick="searchChatHistory()"><i class="bi bi-search"></i></button>
+                <button class="btn btn-outline-secondary" onclick="resetChatSearch()"><i class="bi bi-x-circle"></i></button>
+            </div>
+        </div>
+        <div id="chat-box">
+            <div class="msg-wrap assistant"><div class="msg-ai">New conversation started. Ask me anything about your inventory.</div></div>
+        </div>
+        <div class="chat-input-area">
+            <div class="input-group">
+                <input type="text" id="chatInput" class="form-control" placeholder="Ask about spending or items..." onkeypress="if(event.key==='Enter') sendMessage()">
+                <button class="btn btn-primary" onclick="sendMessage()"><i class="bi bi-send"></i></button>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

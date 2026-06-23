@@ -1,154 +1,76 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Digital Twin | Smart Inventory</title>
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.5/font/bootstrap-icons.css">
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/index.css') }}">
-</head>
-<body>
+{% extends 'base.html' %}
 
-<div class="container py-5">
-    <div class="text-center mb-5">
-        <h1 class="display-4 fw-bold text-primary"><i class="bi bi-cpu"></i> Digital Twin</h1>
-        <p class="text-muted">Efficient AI-Powered Inventory & Warranty Manager</p>
-    </div>
+{% block title %}Dashboard | Digital Twin{% endblock %}
 
-    <ul class="nav nav-pills justify-content-center mb-5" id="mainTabs">
-        <li class="nav-item">
-            <button class="nav-link px-4" data-bs-toggle="pill" data-bs-target="#tab-upload"><i class="bi bi-upload"></i> Upload</button>
-        </li>
-        <li class="nav-item">
-            <button class="nav-link active px-4" data-bs-toggle="pill" data-bs-target="#tab-inventory" onclick="loadInventory()"><i class="bi bi-archive"></i> Inventory</button>
-        </li>
-        <li class="nav-item">
-            <button class="nav-link px-4" data-bs-toggle="pill" data-bs-target="#tab-chat"><i class="bi bi-robot"></i> Assistant</button>
-        </li>
-    </ul>
-
-    <div class="tab-content">
-        
-        <div class="tab-pane fade" id="tab-upload">
-            <div class="card shadow-sm mx-auto p-5 text-center" style="max-width: 500px;">
-                <i class="bi bi-receipt-cutoff display-1 text-primary mb-3"></i>
-                <h3>Scan New Receipt</h3>
-                <!-- Ensure it accepts PDFs and Images -->
-                <input type="file" id="receiptFile" class="form-control mb-3" accept="image/*, application/pdf">
-                <button class="btn btn-primary btn-lg w-100" id="upBtn" onclick="uploadReceipt()">Scan & Save</button>
-                <div class="spinner-border text-primary mt-3 d-none" id="upLoader"></div>
-            </div>
+{% block content %}
+<section class="dashboard-hero mb-4">
+    <div class="hero-copy">
+        <h1 class="page-title mb-2">Your Warranty Command Center</h1>
+        <p class="page-subtitle mb-3">Track spending, monitor active warranties, and jump into actions quickly.</p>
+        <div class="hero-actions d-flex gap-2 flex-wrap">
+            <a href="{{ url_for('pages.upload_page') }}" class="btn btn-primary"><i class="bi bi-upload"></i> Upload Receipt</a>
+            <a href="{{ url_for('pages.assistant_page') }}" class="btn btn-outline-primary"><i class="bi bi-robot"></i> Open Assistant</a>
         </div>
+    </div>
+    <div class="hero-glow"></div>
+</section>
 
-        <div class="tab-pane fade show active" id="tab-inventory">
-            <div class="row g-4 mb-4">
-                <div class="col-md-6">
-                    <div class="card stat-card bg-primary p-4 shadow-sm">
-                        <h6>Total Investment</h6>
-                        <h1 id="s-tot" class="fw-bold">₹0</h1>
-                        <i class="bi bi-wallet2"></i>
-                    </div>
-                </div>
-                <div class="col-md-6">
-                    <div class="card stat-card bg-success p-4 shadow-sm">
-                        <h6>Active Warranties</h6>
-                        <h1 id="s-act" class="fw-bold">0</h1>
-                        <i class="bi bi-shield-check"></i>
-                    </div>
-                </div>
+<section class="row g-4 mb-4">
+    <div class="col-md-4">
+        <div class="card stat-card bg-primary p-4 shadow-sm h-100">
+            <h6>Total Investment</h6>
+            <h1 id="dash-total" class="fw-bold">Rs 0</h1>
+            <i class="bi bi-wallet2"></i>
+        </div>
+    </div>
+    <div class="col-md-4">
+        <div class="card stat-card bg-success p-4 shadow-sm h-100">
+            <h6>Active Warranties</h6>
+            <h1 id="dash-active" class="fw-bold">0</h1>
+            <i class="bi bi-shield-check"></i>
+        </div>
+    </div>
+    <div class="col-md-4">
+        <div class="card stat-card bg-dark p-4 shadow-sm h-100">
+            <h6>Total Registered Items</h6>
+            <h1 id="dash-count" class="fw-bold">0</h1>
+            <i class="bi bi-box-seam"></i>
+        </div>
+    </div>
+</section>
+
+<section class="row g-4">
+    <div class="col-lg-7">
+        <div class="card section-card shadow-sm h-100">
+            <div class="card-header bg-white border-0 d-flex justify-content-between align-items-center">
+                <h5 class="mb-0">Recent Purchases</h5>
+                <a href="{{ url_for('pages.inventory_page') }}" class="btn btn-sm btn-outline-primary">View All</a>
             </div>
-
-            <div class="card shadow-sm border-0">
-                <div class="card-body p-0">
-                    <div class="table-responsive">
-                        <table class="table table-hover mb-0 align-middle">
-                            <thead class="bg-light">
-                                <tr>
-                                    <th class="ps-4">Product</th>
-                                    <th>Category</th>
-                                    <th>Date</th>
-                                    <th>Amount</th>
-                                    <th>Warranty</th>
-                                    <th class="text-end pe-4">Actions</th>
-                                </tr>
-                            </thead>
-                            <tbody id="invTable"></tbody>
-                        </table>
-                    </div>
+            <div class="card-body p-0">
+                <div class="table-responsive">
+                    <table class="table table-hover mb-0 align-middle">
+                        <thead class="bg-light">
+                            <tr>
+                                <th class="ps-4">Item</th>
+                                <th>Date</th>
+                                <th>Amount</th>
+                                <th class="pe-4">Warranty</th>
+                            </tr>
+                        </thead>
+                        <tbody id="dash-recent-body"></tbody>
+                    </table>
                 </div>
             </div>
         </div>
+    </div>
 
-        <div class="tab-pane fade" id="tab-chat">
-            <div class="mx-auto chat-layout" style="max-width: 1180px;">
-                <aside class="chat-sidebar shadow-sm">
-                    <div class="sidebar-title"><i class="bi bi-clock-history"></i> Recent Conversations</div>
-                    <div class="sidebar-subtitle">Grouped by date</div>
-                    <div id="recentConversations"></div>
-                </aside>
-
-                <div class="chat-shell shadow-sm">
-                    <div class="chat-topbar">
-                        <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-2">
-                            <div>
-                                <div class="chat-title"><i class="bi bi-stars"></i> Smart Assistant</div>
-                                <div class="chat-subtitle">Chat history is saved and searchable</div>
-                            </div>
-                            <div class="chat-controls d-flex gap-2">
-                                <button class="btn btn-outline-danger btn-sm" onclick="clearChatHistory()"><i class="bi bi-trash3"></i> Clear History</button>
-                            </div>
-                        </div>
-                        <div class="input-group input-group-sm">
-                            <input type="text" id="chatSearchInput" class="form-control chat-search-input" placeholder="Search in chat history..." onkeypress="if(event.key==='Enter') searchChatHistory()">
-                            <button class="btn btn-outline-secondary" onclick="searchChatHistory()"><i class="bi bi-search"></i></button>
-                            <button class="btn btn-outline-secondary" onclick="resetChatSearch()"><i class="bi bi-x-circle"></i></button>
-                        </div>
-                    </div>
-                    <div id="chat-box">
-                        <div class="msg-wrap assistant"><div class="msg-ai">Loading your previous chats...</div></div>
-                    </div>
-                    <div class="chat-input-area">
-                        <div class="input-group">
-                            <input type="text" id="chatInput" class="form-control" placeholder="Ask about spending or items..." onkeypress="if(event.key==='Enter') sendMessage()">
-                            <button class="btn btn-primary" onclick="sendMessage()"><i class="bi bi-send"></i></button>
-                        </div>
-                    </div>
-                </div>
+    <div class="col-lg-5">
+        <div class="card section-card shadow-sm h-100">
+            <div class="card-header bg-white border-0">
+                <h5 class="mb-0">Needs Attention</h5>
             </div>
+            <div class="card-body" id="dash-alerts"></div>
         </div>
-
     </div>
-</div>
-
-<div class="modal fade" id="summaryModal" tabindex="-1" aria-labelledby="summaryModalLabel" aria-hidden="true">
-  <div class="modal-dialog modal-dialog-centered">
-    <div class="modal-content">
-      <div class="modal-header bg-success text-white">
-        <h5 class="modal-title" id="summaryModalLabel"><i class="bi bi-check-circle-fill"></i> Digitization Complete</h5>
-        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
-      </div>
-      <div class="modal-body">
-        <p>Your document has been successfully processed and added to your Digital Twin.</p>
-        <ul class="list-group list-group-flush">
-            <li class="list-group-item"><strong>Item:</strong> <span id="modalItemName"></span></li>
-            <li class="list-group-item"><strong>Category:</strong> <span id="modalCategory"></span></li>
-            <li class="list-group-item"><strong>Store:</strong> <span id="modalStore"></span></li>
-            <li class="list-group-item"><strong>Date:</strong> <span id="modalDate"></span></li>
-            <li class="list-group-item"><strong>Invoice No:</strong> <span id="modalInvoice"></span></li>
-            <li class="list-group-item"><strong>Warranty Info:</strong> <span id="modalWarranty"></span></li>
-            <li class="list-group-item"><strong>Total Amount:</strong> ₹<span id="modalPrice"></span></li>
-        </ul>
-      </div>
-      <div class="modal-footer">
-        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Upload Another</button>
-        <button type="button" class="btn btn-primary" data-bs-dismiss="modal" onclick="document.querySelector('[data-bs-target=\'#tab-inventory\']').click();">View Inventory</button>
-      </div>
-    </div>
-  </div>
-</div>
-
-<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
-<script src="{{ url_for('static', filename='js/index.js') }}"></script>
-</body>
-</html>
+</section>
+{% endblock %}

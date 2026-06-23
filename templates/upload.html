@@ -1,0 +1,47 @@
+{% extends 'base.html' %}
+
+{% block title %}Upload | Digital Twin{% endblock %}
+
+{% block content %}
+<section class="page-hero mb-4">
+    <h1 class="page-title">Upload Receipt</h1>
+    <p class="page-subtitle">Scan a new receipt and let AI extract the product and warranty details.</p>
+</section>
+
+<section class="card section-card mx-auto p-5 text-center" style="max-width: 640px;">
+    <i class="bi bi-receipt-cutoff display-2 text-primary mb-3"></i>
+    <h3 class="mb-3">Scan New Receipt</h3>
+    <input type="file" id="receiptFile" class="form-control mb-3" accept="image/*, application/pdf">
+    <button class="btn btn-primary btn-lg w-100" id="upBtn" onclick="uploadReceipt()">Scan and Save</button>
+    <div class="spinner-border text-primary mt-3 d-none" id="upLoader"></div>
+</section>
+{% endblock %}
+
+{% block modals %}
+<div class="modal fade" id="summaryModal" tabindex="-1" aria-labelledby="summaryModalLabel" aria-hidden="true">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content">
+      <div class="modal-header bg-success text-white">
+        <h5 class="modal-title" id="summaryModalLabel"><i class="bi bi-check-circle-fill"></i> Digitization Complete</h5>
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body">
+        <p>Your document has been successfully processed and added to your Digital Twin.</p>
+        <ul class="list-group list-group-flush">
+            <li class="list-group-item"><strong>Item:</strong> <span id="modalItemName"></span></li>
+            <li class="list-group-item"><strong>Category:</strong> <span id="modalCategory"></span></li>
+            <li class="list-group-item"><strong>Store:</strong> <span id="modalStore"></span></li>
+            <li class="list-group-item"><strong>Date:</strong> <span id="modalDate"></span></li>
+            <li class="list-group-item"><strong>Invoice No:</strong> <span id="modalInvoice"></span></li>
+            <li class="list-group-item"><strong>Warranty Info:</strong> <span id="modalWarranty"></span></li>
+            <li class="list-group-item"><strong>Total Amount:</strong> <span id="modalPrice"></span></li>
+        </ul>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Upload Another</button>
+        <a href="{{ url_for('pages.inventory_page') }}" class="btn btn-primary">View Inventory</a>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
