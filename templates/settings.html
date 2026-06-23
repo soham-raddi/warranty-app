@@ -1,0 +1,181 @@
+{% extends 'base.html' %}
+
+{% block title %}Settings | Digital Twin{% endblock %}
+
+{% block content %}
+<section class="page-hero mb-4">
+    <h1 class="page-title">Settings</h1>
+    <p class="page-subtitle">Tune the app for readability, comfort, and the way you prefer to see dates and times.</p>
+</section>
+
+<div class="settings-layout">
+    <section class="card section-card shadow-sm settings-main-card">
+        <div class="p-4 p-lg-5">
+            <form id="settingsForm" onsubmit="saveSettings(event)">
+                <div class="settings-group mb-4">
+                    <div class="settings-group-header">
+                        <div>
+                            <h2 class="settings-group-title">Date and time</h2>
+                            <p class="settings-group-note mb-0">Control how receipts, conversations, and warranty dates are shown.</p>
+                        </div>
+                        <span class="settings-group-badge">Core</span>
+                    </div>
+
+                    <div class="row g-3 mt-1">
+                        <div class="col-md-6">
+                            <label class="form-label fw-semibold" for="settingsTimezone">Timezone</label>
+                            <select id="settingsTimezone" class="form-select">
+                                <option value="UTC">UTC</option>
+                                <option value="Asia/Kolkata">Asia/Kolkata</option>
+                                <option value="Asia/Dubai">Asia/Dubai</option>
+                                <option value="Asia/Singapore">Asia/Singapore</option>
+                                <option value="Europe/London">Europe/London</option>
+                                <option value="Europe/Berlin">Europe/Berlin</option>
+                                <option value="America/New_York">America/New_York</option>
+                                <option value="America/Los_Angeles">America/Los_Angeles</option>
+                                <option value="Australia/Sydney">Australia/Sydney</option>
+                            </select>
+                            <div class="form-text">Used for chat timestamps and date labels.</div>
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label fw-semibold" for="settingsTimeFormat">Time format</label>
+                            <select id="settingsTimeFormat" class="form-select">
+                                <option value="12h">12-hour clock</option>
+                                <option value="24h">24-hour clock</option>
+                            </select>
+                            <div class="form-text">Applies to chat and activity timestamps.</div>
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label fw-semibold" for="settingsDateFormat">Date format</label>
+                            <select id="settingsDateFormat" class="form-select">
+                                <option value="auto">Readable local date</option>
+                                <option value="iso">ISO style (YYYY-MM-DD)</option>
+                                <option value="dmy">Day / month / year</option>
+                                <option value="mdy">Month / day / year</option>
+                                <option value="long">Long date with weekday</option>
+                            </select>
+                            <div class="form-text">Used in inventory, dashboard, and chat separators.</div>
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label fw-semibold" for="settingsWarrantyDays">Default Warranty Period (days)</label>
+                            <input id="settingsWarrantyDays" type="number" min="1" max="3650" class="form-control" placeholder="365">
+                            <div class="form-text">Used to mark items as Active or Expired when exact duration is unavailable.</div>
+                        </div>
+                        <div class="col-12">
+                            <label class="form-label fw-semibold" for="settingsCurrency">Currency</label>
+                            <select id="settingsCurrency" class="form-select">
+                                <option value="INR" data-symbol="Rs">Indian Rupee (Rs)</option>
+                                <option value="USD" data-symbol="$">US Dollar ($)</option>
+                                <option value="EUR" data-symbol="€">Euro (€)</option>
+                                <option value="GBP" data-symbol="£">British Pound (£)</option>
+                                <option value="AED" data-symbol="د.إ">UAE Dirham (د.إ)</option>
+                                <option value="CAD" data-symbol="$">Canadian Dollar (C$)</option>
+                                <option value="AUD" data-symbol="$">Australian Dollar (A$)</option>
+                                <option value="SGD" data-symbol="$">Singapore Dollar (S$)</option>
+                                <option value="JPY" data-symbol="¥">Japanese Yen (¥)</option>
+                                <option value="CNY" data-symbol="¥">Chinese Yuan (¥)</option>
+                            </select>
+                            <div class="form-text">Inventory values are converted from the stored base amount when displayed.</div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="settings-group mb-4">
+                    <div class="settings-group-header">
+                        <div>
+                            <h2 class="settings-group-title">Look and feel</h2>
+                            <p class="settings-group-note mb-0">Change how the app looks and how much content it shows at once.</p>
+                        </div>
+                        <span class="settings-group-badge">Visual</span>
+                    </div>
+
+                    <div class="row g-3 mt-1">
+                        <div class="col-md-6">
+                            <label class="form-label fw-semibold" for="settingsThemeMode">Theme</label>
+                            <select id="settingsThemeMode" class="form-select">
+                                <option value="system">Follow system preference</option>
+                                <option value="light">Light</option>
+                                <option value="dark">Dark</option>
+                            </select>
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label fw-semibold" for="settingsAccentColor">Accent color</label>
+                            <select id="settingsAccentColor" class="form-select">
+                                <option value="blue">Blue</option>
+                                <option value="teal">Teal</option>
+                                <option value="amber">Amber</option>
+                                <option value="rose">Rose</option>
+                                <option value="slate">Slate</option>
+                            </select>
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label fw-semibold" for="settingsDensity">Layout density</label>
+                            <select id="settingsDensity" class="form-select">
+                                <option value="comfortable">Comfortable spacing</option>
+                                <option value="compact">Compact spacing</option>
+                            </select>
+                            <div class="form-text">Compact mode shows more content with less padding.</div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="settings-group mb-4">
+                    <div class="settings-group-header">
+                        <div>
+                            <h2 class="settings-group-title">Accessibility</h2>
+                            <p class="settings-group-note mb-0">Reduce visual noise when you want a calmer interface.</p>
+                        </div>
+                        <span class="settings-group-badge">Accessibility</span>
+                    </div>
+
+                    <div class="settings-toggle-grid mt-3">
+                        <label class="settings-toggle">
+                            <input id="settingsReducedMotion" type="checkbox">
+                            <span>
+                                <strong>Reduce motion</strong>
+                                <small>Minimizes animation and hover transitions across the app.</small>
+                            </span>
+                        </label>
+                    </div>
+                </div>
+
+                <div class="d-flex flex-wrap gap-2 align-items-center">
+                    <button type="submit" class="btn btn-primary">Save Settings</button>
+                    <button type="button" class="btn btn-outline-secondary" onclick="loadSettingsIntoForm()">Reload</button>
+                </div>
+
+                <p id="settingsStatus" class="small mt-3 mb-0"></p>
+            </form>
+        </div>
+    </section>
+
+    <aside class="card section-card shadow-sm settings-preview-card">
+        <div class="p-4 p-lg-5">
+            <h2 class="settings-preview-title mb-2">Preview</h2>
+            <p class="settings-preview-note">These settings change how the app frames the same data.</p>
+            <div class="settings-preview-grid">
+                <div>
+                    <span class="settings-preview-label">Date sample</span>
+                    <strong>Inventory purchase dates</strong>
+                    <p>Lists and separators follow your selected date format.</p>
+                </div>
+                <div>
+                    <span class="settings-preview-label">Time sample</span>
+                    <strong>Chat timestamps</strong>
+                    <p>Activity times respect your clock preference and timezone.</p>
+                </div>
+                <div>
+                    <span class="settings-preview-label">Theme sample</span>
+                    <strong>App chrome</strong>
+                    <p>The shell, cards, and controls adapt to light, dark, or system mode.</p>
+                </div>
+                <div>
+                    <span class="settings-preview-label">Accessibility sample</span>
+                    <strong>Reduced motion</strong>
+                    <p>Transition-heavy UI elements can be softened for comfort.</p>
+                </div>
+            </div>
+        </div>
+    </aside>
+</div>
+{% endblock %}

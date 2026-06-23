@@ -1,8 +1,31 @@
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timedelta
 
 conn = sqlite3.connect('inventory.db', check_same_thread=False)
 cursor = conn.cursor()
+
+DEFAULT_SETTINGS = {
+    'timezone': 'UTC',
+    'currency_symbol': 'Rs',
+    'currency_code': 'INR',
+    'warranty_period_days': '365',
+    'theme_mode': 'system',
+    'accent_color': 'blue',
+    'date_format': 'auto',
+    'time_format': '12h',
+    'reduced_motion': '0',
+    'density': 'comfortable',
+    'expiry_alert_days': '30',
+    'reminders_enabled': '0',
+    'reminder_days_before': '30',
+    'reminder_recipients': '',
+    'reminder_subject': 'Warranty expiry reminder',
+    'reminder_body': 'Your warranty for {{item_name}} expires on {{expiry_date}}. Days left: {{days_remaining}}.',
+    'smtp_host': '',
+    'smtp_port': '587',
+    'smtp_username': '',
+    'smtp_sender_email': ''
+}
 
 # Upgraded to v5 to include invoice_number
 cursor.execute('''
@@ -22,11 +45,50 @@ conn.commit()
 cursor.execute('''
     CREATE TABLE IF NOT EXISTS chat_messages (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
+        conversation_id TEXT NOT NULL DEFAULT '',
         role TEXT NOT NULL,
         content TEXT NOT NULL,
         created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     )
 ''')
+conn.commit()
+
+cursor.execute('''
+    CREATE TABLE IF NOT EXISTS service_history (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        item_id INTEGER NOT NULL,
+        service_date TEXT NOT NULL,
+        service_type TEXT NOT NULL,
+        vendor TEXT,
+        cost TEXT,
+        notes TEXT,
+        next_service_date TEXT,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )
+''')
+conn.commit()
+
+cursor.execute('''
+    CREATE TABLE IF NOT EXISTS app_settings (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+    )
+''')
+conn.commit()
+
+for _key, _value in DEFAULT_SETTINGS.items():
+    cursor.execute(
+        'INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)',
+        (_key, _value)
+    )
+conn.commit()
+
+try:
+    cursor.execute('ALTER TABLE chat_messages ADD COLUMN conversation_id TEXT NOT NULL DEFAULT ""')
+except sqlite3.OperationalError:
+    pass
+
+cursor.execute("UPDATE chat_messages SET conversation_id = 'legacy' WHERE conversation_id IS NULL OR conversation_id = ''")
 conn.commit()
 
 # Lightweight migration for existing inventories created before warranty-card columns were introduced.
@@ -37,6 +99,13 @@ except sqlite3.OperationalError:
 
 try:
     cursor.execute('ALTER TABLE appliances_v5 ADD COLUMN warranty_card_path TEXT')
+except sqlite3.OperationalError:
+    pass
+
+conn.commit()
+
+try:
+    cursor.execute('CREATE INDEX IF NOT EXISTS idx_service_history_item_id ON service_history(item_id)')
 except sqlite3.OperationalError:
     pass
 
@@ -114,6 +183,20 @@ def get_inventory_analytics():
     items = [dict(zip(columns, row)) for row in rows]
     total_spent = 0.0
     active_warranties = 0
+    warranty_period_days = 365
+    alert_window_days = 30
+
+    try:
+        warranty_period_days = max(1, int(get_setting_value('warranty_period_days', '365')))
+    except Exception:
+        warranty_period_days = 365
+
+    try:
+        alert_window_days = max(0, int(get_setting_value('expiry_alert_days', '30')))
+    except Exception:
+        alert_window_days = 30
+
+    alerts = []
     
     for item in items:
         try:
@@ -123,39 +206,125 @@ def get_inventory_analytics():
             
         try:
             p_date = datetime.strptime(item['date_of_purchase'], '%Y-%m-%d')
-            if (datetime.now() - p_date).days < 365:
+            expiry_date = p_date + timedelta(days=warranty_period_days)
+            days_remaining = (expiry_date.date() - datetime.now().date()).days
+            item['warranty_expires_on'] = expiry_date.strftime('%Y-%m-%d')
+            item['days_remaining'] = days_remaining
+
+            if days_remaining >= 0 and days_remaining <= alert_window_days:
+                item['warranty_status'] = 'Expiring Soon'
+                alerts.append({
+                    'id': item.get('id'),
+                    'item_name': item.get('item_name') or 'Item',
+                    'status': 'expiring_soon',
+                    'days_remaining': days_remaining,
+                    'expiry_date': item['warranty_expires_on'],
+                    'category': item.get('category') or 'N/A',
+                    'brand': item.get('brand') or 'N/A'
+                })
+            elif days_remaining < 0:
+                item['warranty_status'] = 'Expired'
+                alerts.append({
+                    'id': item.get('id'),
+                    'item_name': item.get('item_name') or 'Item',
+                    'status': 'expired',
+                    'days_remaining': days_remaining,
+                    'expiry_date': item['warranty_expires_on'],
+                    'category': item.get('category') or 'N/A',
+                    'brand': item.get('brand') or 'N/A'
+                })
+            elif (datetime.now() - p_date).days < warranty_period_days:
                 active_warranties += 1
                 item['warranty_status'] = "Active"
             else:
                 item['warranty_status'] = "Expired"
         except:
             item['warranty_status'] = "Unknown"
+            item['warranty_expires_on'] = None
+            item['days_remaining'] = None
             
-    return items, round(total_spent, 2), active_warranties
+    return items, round(total_spent, 2), active_warranties, alerts
 
 
-def save_chat_message(role, content):
+def add_service_history_entry(item_id, service_date, service_type, vendor='', cost='', notes='', next_service_date=''):
+    cursor.execute(
+        '''
+        INSERT INTO service_history (
+            item_id, service_date, service_type, vendor, cost, notes, next_service_date
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+        ''',
+        (item_id, service_date, service_type, vendor, cost, notes, next_service_date)
+    )
+    conn.commit()
+    return cursor.lastrowid
+
+
+def get_service_history(item_id):
+    cursor.execute(
+        '''
+        SELECT id, item_id, service_date, service_type, vendor, cost, notes, next_service_date, created_at
+        FROM service_history
+        WHERE item_id = ?
+        ORDER BY service_date DESC, id DESC
+        ''',
+        (item_id,)
+    )
+    rows = cursor.fetchall()
+    return [
+        {
+            'id': row[0],
+            'item_id': row[1],
+            'service_date': row[2],
+            'service_type': row[3],
+            'vendor': row[4],
+            'cost': row[5],
+            'notes': row[6],
+            'next_service_date': row[7],
+            'created_at': row[8]
+        }
+        for row in rows
+    ]
+
+
+def get_service_history_summary(item_id):
+    history = get_service_history(item_id)
+    last_service = history[0] if history else None
+    return {
+        'item_id': item_id,
+        'entries': history,
+        'count': len(history),
+        'last_service': last_service
+    }
+
+
+def _normalize_conversation_id(conversation_id):
+    normalized = str(conversation_id or '').strip()
+    return normalized if normalized else 'legacy'
+
+
+def save_chat_message(role, content, conversation_id='legacy'):
     if not role or content is None:
         return False
 
     cursor.execute(
-        'INSERT INTO chat_messages (role, content) VALUES (?, ?)',
-        (str(role), str(content))
+        'INSERT INTO chat_messages (conversation_id, role, content) VALUES (?, ?, ?)',
+        (_normalize_conversation_id(conversation_id), str(role), str(content))
     )
     conn.commit()
     return True
 
 
-def get_chat_messages(limit=100):
+def get_chat_messages(conversation_id='legacy', limit=100):
     safe_limit = max(1, min(int(limit), 500))
     cursor.execute(
         '''
         SELECT id, role, content, created_at
         FROM chat_messages
+        WHERE conversation_id = ?
         ORDER BY id DESC
         LIMIT ?
         ''',
-        (safe_limit,)
+        (_normalize_conversation_id(conversation_id), safe_limit)
     )
     rows = cursor.fetchall()
 
@@ -172,22 +341,22 @@ def get_chat_messages(limit=100):
     return messages
 
 
-def search_chat_messages(query, limit=120):
+def search_chat_messages(query, conversation_id='legacy', limit=120):
     safe_limit = max(1, min(int(limit), 500))
     query_text = (query or '').strip()
     if not query_text:
-        return get_chat_messages(limit=safe_limit)
+        return get_chat_messages(conversation_id=conversation_id, limit=safe_limit)
 
     like_query = f"%{query_text}%"
     cursor.execute(
         '''
         SELECT id, role, content, created_at
         FROM chat_messages
-        WHERE content LIKE ?
+        WHERE conversation_id = ? AND content LIKE ?
         ORDER BY id DESC
         LIMIT ?
         ''',
-        (like_query, safe_limit)
+        (_normalize_conversation_id(conversation_id), like_query, safe_limit)
     )
     rows = cursor.fetchall()
 
@@ -204,7 +373,107 @@ def search_chat_messages(query, limit=120):
     return messages
 
 
-def clear_chat_messages():
-    cursor.execute('DELETE FROM chat_messages')
+def get_chat_conversations(query='', limit=100):
+    safe_limit = max(1, min(int(limit), 500))
+    query_text = (query or '').strip()
+    like_query = f"%{query_text}%" if query_text else None
+
+    cursor.execute(
+        '''
+        WITH conversation_summaries AS (
+            SELECT
+                COALESCE(NULLIF(conversation_id, ''), 'legacy') AS conversation_id,
+                MIN(id) AS first_message_id,
+                MIN(created_at) AS created_at,
+                MAX(created_at) AS updated_at,
+                COUNT(*) AS message_count
+            FROM chat_messages
+            GROUP BY COALESCE(NULLIF(conversation_id, ''), 'legacy')
+        )
+        SELECT
+            c.conversation_id,
+            c.created_at,
+            c.updated_at,
+            c.message_count,
+            (
+                SELECT content
+                FROM chat_messages m1
+                WHERE COALESCE(NULLIF(m1.conversation_id, ''), 'legacy') = c.conversation_id
+                  AND m1.role = 'user'
+                ORDER BY m1.id ASC
+                LIMIT 1
+            ) AS title,
+            (
+                SELECT content
+                FROM chat_messages m2
+                WHERE COALESCE(NULLIF(m2.conversation_id, ''), 'legacy') = c.conversation_id
+                ORDER BY m2.id DESC
+                LIMIT 1
+            ) AS preview
+        FROM conversation_summaries c
+        WHERE (? IS NULL OR EXISTS (
+            SELECT 1
+            FROM chat_messages m3
+            WHERE COALESCE(NULLIF(m3.conversation_id, ''), 'legacy') = c.conversation_id
+              AND m3.content LIKE ?
+        ))
+        ORDER BY c.updated_at DESC
+        LIMIT ?
+        ''',
+        (like_query, like_query, safe_limit)
+    )
+
+    rows = cursor.fetchall()
+    return [
+        {
+            'conversation_id': row[0],
+            'created_at': row[1],
+            'updated_at': row[2],
+            'message_count': row[3],
+            'title': row[4],
+            'preview': row[5]
+        }
+        for row in rows
+    ]
+
+
+def clear_chat_messages(conversation_id=None):
+    if conversation_id is None:
+        cursor.execute('DELETE FROM chat_messages')
+    else:
+        cursor.execute(
+            'DELETE FROM chat_messages WHERE COALESCE(NULLIF(conversation_id, ""), "legacy") = ?',
+            (_normalize_conversation_id(conversation_id),)
+        )
     conn.commit()
     return True
+
+
+def get_setting_value(key, default_value=None):
+    cursor.execute('SELECT value FROM app_settings WHERE key = ?', (str(key),))
+    row = cursor.fetchone()
+    if row is None:
+        return default_value
+    return row[0]
+
+
+def set_setting_value(key, value):
+    cursor.execute(
+        '''
+        INSERT INTO app_settings (key, value)
+        VALUES (?, ?)
+        ON CONFLICT(key) DO UPDATE SET value = excluded.value
+        ''',
+        (str(key), str(value))
+    )
+    conn.commit()
+    return True
+
+
+def get_all_settings():
+    result = dict(DEFAULT_SETTINGS)
+    cursor.execute('SELECT key, value FROM app_settings')
+    rows = cursor.fetchall()
+    for row in rows:
+        result[row[0]] = row[1]
+    return result
