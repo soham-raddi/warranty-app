@@ -68,6 +68,11 @@ function stateRow(colspan, message, isError = false) {
     return `<tr><td colspan="${Number(colspan)}" class="p-0">${stateBlock(message, isError)}</td></tr>`;
 }
 
+function canManageWorkspace() {
+    // Mirrors the server's checks; the server still enforces them.
+    return ['owner', 'admin'].includes(document.body.dataset.role);
+}
+
 function renderMessageContent(content, role) {
     const text = String(content || '');
     // Assistant replies are Markdown; render them only when the sanitizer is available.
@@ -543,7 +548,7 @@ async function loadInventory() {
                     <div class="btn-group">
                         <button type="button" class="btn btn-sm btn-outline-info" data-action="service-history" data-item-id="${itemId}" data-item-name="${escapeHtml(i.item_name || 'Item')}" title="View service history"><i class="bi bi-clock-history"></i></button>
                         <a href="/files/receipt/${itemId}" download class="btn btn-sm btn-outline-secondary" title="Download receipt"><i class="bi bi-download"></i></a>
-                        <button type="button" data-action="delete-item" data-item-id="${itemId}" class="btn btn-sm btn-outline-danger" title="Delete Record"><i class="bi bi-trash"></i></button>
+                        ${canManageWorkspace() ? `<button type="button" data-action="delete-item" data-item-id="${itemId}" class="btn btn-sm btn-outline-danger" title="Delete Record"><i class="bi bi-trash"></i></button>` : ''}
                     </div>
                 </td>
             </tr>`;
@@ -1251,6 +1256,63 @@ document.addEventListener('click', (event) => {
         case 'open-conversation':
             openConversation(target.dataset.conversationId);
             break;
+        case 'switch-workspace':
+            switchWorkspace(Number(target.dataset.workspaceId));
+            break;
+        case 'create-workspace':
+            openCreateWorkspace();
+            break;
+    }
+});
+
+async function switchWorkspace(workspaceId) {
+    try {
+        const res = await fetch('/api/workspaces/switch', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ workspace_id: workspaceId })
+        });
+        const data = await res.json();
+        if (!res.ok) {
+            showToast(data.error || 'Could not switch workspace.', 'danger');
+            return;
+        }
+        // Everything on the page belongs to the old workspace, so start fresh on the dashboard.
+        window.location.href = '/';
+    } catch (e) {
+        showToast('Could not switch workspace.', 'danger');
+    }
+}
+
+function openCreateWorkspace() {
+    const modalEl = byId('createWorkspaceModal');
+    if (!modalEl) return;
+    const input = byId('newWorkspaceName');
+    if (input) input.value = '';
+    bootstrap.Modal.getOrCreateInstance(modalEl).show();
+    modalEl.addEventListener('shown.bs.modal', () => input && input.focus(), { once: true });
+}
+
+async function createWorkspace(name) {
+    const res = await fetch('/api/workspaces', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name })
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || 'Could not create the workspace.');
+    return data.workspace;
+}
+
+document.addEventListener('submit', async (event) => {
+    if (event.target.id !== 'createWorkspaceForm') return;
+    event.preventDefault();
+    const input = byId('newWorkspaceName');
+    try {
+        await createWorkspace(input ? input.value.trim() : '');
+        window.location.href = '/';
+    } catch (e) {
+        showToast(e.message, 'danger');
     }
 });
 

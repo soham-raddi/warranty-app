@@ -40,9 +40,10 @@ def find_item_fuzzy(user_msg, items):
     return best_item
 
 
-def ask_digital_twin(user_message, chat_history):
-    items, total, active, _alerts = get_inventory_analytics()
-    settings = get_all_settings()
+def ask_digital_twin(user_message, chat_history, workspace_id):
+    # Only this workspace's inventory is ever shown to the model.
+    items, total, active, _alerts = get_inventory_analytics(workspace_id)
+    settings = get_all_settings(workspace_id)
     currency_code = settings.get('currency_code', 'INR')
     currency_symbol = settings.get('currency_symbol', '₹')
     

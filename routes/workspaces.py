@@ -1,0 +1,178 @@
+import os
+import re
+
+from flask import Blueprint, g, jsonify, redirect, render_template, request, session, url_for
+
+from database import (
+    create_invite,
+    create_workspace,
+    delete_invite,
+    get_membership_role,
+    get_user_workspaces,
+    list_invites,
+    list_workspace_members,
+    remove_workspace_member,
+    rename_workspace,
+)
+from .auth import role_required
+
+workspaces_bp = Blueprint('workspaces', __name__)
+
+EMAIL_PATTERN = re.compile(r'^[^@\s]+@[^@\s]+\.[^@\s]+$')
+MAX_NAME_LENGTH = 60
+# Keeps one account from creating workspaces without limit on a public install.
+MAX_OWNED_WORKSPACES = 5
+
+
+def new_workspaces_allowed():
+    """ALLOW_NEW_WORKSPACES=false makes the install invite-only (people can only join existing families)."""
+    return os.getenv('ALLOW_NEW_WORKSPACES', 'true').lower() in {'1', 'true', 'yes'}
+
+
+def _clean_name(raw):
+    name = re.sub(r'\s+', ' ', str(raw or '')).strip()
+    return name[:MAX_NAME_LENGTH]
+
+
+def _default_workspace_name(user):
+    first_name = (user.get('name') or user['email'].split('@')[0]).split()[0]
+    return f"{first_name}'s Family"
+
+
+@workspaces_bp.route('/welcome')
+def welcome_page():
+    """Shown to signed-in people who do not belong to any workspace yet."""
+    user = g.current_user
+    if get_user_workspaces(user['id']):
+        return redirect(url_for('pages.dashboard_page'))
+    return render_template(
+        'welcome.html',
+        user=user,
+        can_create=new_workspaces_allowed(),
+        suggested_name=_default_workspace_name(user),
+    )
+
+
+@workspaces_bp.route('/api/workspaces', methods=['GET'])
+def list_my_workspaces():
+    return jsonify({
+        'workspaces': get_user_workspaces(g.current_user['id']),
+        'current_workspace_id': session.get('workspace_id'),
+        'can_create': new_workspaces_allowed(),
+    })
+
+
+@workspaces_bp.route('/api/workspaces', methods=['POST'])
+def create_my_workspace():
+    if not new_workspaces_allowed():
+        return jsonify({'error': 'New workspaces are disabled on this site. Ask a family owner to invite you.'}), 403
+
+    user = g.current_user
+    owned = [w for w in get_user_workspaces(user['id']) if w['role'] == 'owner']
+    if len(owned) >= MAX_OWNED_WORKSPACES:
+        return jsonify({'error': f'You can own at most {MAX_OWNED_WORKSPACES} workspaces'}), 400
+
+    payload = request.json or {}
+    name = _clean_name(payload.get('name')) or _default_workspace_name(user)
+    workspace_id = create_workspace(name, user['id'])
+    session['workspace_id'] = workspace_id
+    return jsonify({'workspace': {'id': workspace_id, 'name': name, 'role': 'owner'}}), 201
+
+
+@workspaces_bp.route('/api/workspaces/switch', methods=['POST'])
+def switch_workspace():
+    payload = request.json or {}
+    try:
+        workspace_id = int(payload.get('workspace_id'))
+    except (TypeError, ValueError):
+        return jsonify({'error': 'workspace_id is required'}), 400
+
+    if not get_membership_role(workspace_id, g.current_user['id']):
+        return jsonify({'error': 'You are not a member of that workspace'}), 403
+
+    session['workspace_id'] = workspace_id
+    return jsonify({'message': 'Switched workspace', 'workspace_id': workspace_id})
+
+
+@workspaces_bp.route('/api/workspace', methods=['PATCH'])
+@role_required('owner')
+def rename_current_workspace():
+    name = _clean_name((request.json or {}).get('name'))
+    if not name:
+        return jsonify({'error': 'Workspace name cannot be empty'}), 400
+    rename_workspace(g.workspace_id, name)
+    return jsonify({'message': 'Workspace renamed', 'workspace': {'id': g.workspace_id, 'name': name}})
+
+
+@workspaces_bp.route('/api/workspace/members', methods=['GET'])
+def workspace_members():
+    can_manage = g.role in ('owner', 'admin')
+    return jsonify({
+        'workspace': g.workspace,
+        'members': list_workspace_members(g.workspace_id),
+        'invites': list_invites(g.workspace_id) if can_manage else [],
+        'current_user_id': g.current_user['id'],
+        'current_role': g.role,
+        'can_manage': can_manage,
+        'can_add_admins': g.role == 'owner',
+    })
+
+
+@workspaces_bp.route('/api/workspace/invites', methods=['POST'])
+@role_required('owner', 'admin')
+def invite_member():
+    payload = request.json or {}
+    email = str(payload.get('email', '')).strip().lower()
+    role = str(payload.get('role', 'member')).strip().lower()
+
+    if not EMAIL_PATTERN.match(email):
+        return jsonify({'error': 'Enter a valid email address'}), 400
+    if role not in ('member', 'admin'):
+        role = 'member'
+    if role == 'admin' and g.role != 'owner':
+        return jsonify({'error': 'Only the owner can invite admins'}), 403
+
+    invite, error = create_invite(g.workspace_id, email, role, g.current_user['id'])
+    if error:
+        return jsonify({'error': error}), 400
+    return jsonify({
+        'message': f'Invited {email}. They join when they sign in with that Google account.',
+        'invite': invite,
+    }), 201
+
+
+@workspaces_bp.route('/api/workspace/invites/<int:invite_id>', methods=['DELETE'])
+@role_required('owner', 'admin')
+def revoke_invite(invite_id):
+    if not delete_invite(g.workspace_id, invite_id):
+        return jsonify({'error': 'Invite not found'}), 404
+    return jsonify({'message': 'Invite revoked'})
+
+
+@workspaces_bp.route('/api/workspace/members/<int:user_id>', methods=['DELETE'])
+@role_required('owner', 'admin')
+def remove_member(user_id):
+    if user_id == g.current_user['id']:
+        return jsonify({'error': 'Use "Leave workspace" to remove yourself'}), 400
+
+    target_role = get_membership_role(g.workspace_id, user_id)
+    if target_role is None:
+        return jsonify({'error': 'This person is not a member of the workspace'}), 404
+    if g.role == 'admin' and target_role != 'member':
+        return jsonify({'error': 'Admins can only remove members'}), 403
+
+    removed, message = remove_workspace_member(g.workspace_id, user_id)
+    if not removed:
+        return jsonify({'error': message}), 400
+    return jsonify({'message': message})
+
+
+@workspaces_bp.route('/api/workspace/leave', methods=['POST'])
+def leave_workspace():
+    if g.role == 'owner':
+        return jsonify({'error': 'The owner cannot leave their own workspace'}), 400
+
+    remove_workspace_member(g.workspace_id, g.current_user['id'])
+    remaining = get_user_workspaces(g.current_user['id'])
+    session['workspace_id'] = remaining[0]['id'] if remaining else None
+    return jsonify({'message': 'You left the workspace', 'redirect': url_for('pages.dashboard_page') if remaining else url_for('workspaces.welcome_page')})

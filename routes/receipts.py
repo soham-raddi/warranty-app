@@ -1,13 +1,14 @@
 import os
 import uuid
 
-from flask import Blueprint, abort, current_app, jsonify, request, send_file
+from flask import Blueprint, abort, current_app, g, jsonify, request, send_file
 from werkzeug.utils import secure_filename
 
 from database import (
     add_service_history_entry,
     delete_appliance,
     find_duplicate_receipt,
+    item_exists,
     get_appliance_file_paths,
     get_inventory_analytics,
     get_service_history,
@@ -45,6 +46,11 @@ def _save_upload(file, folder):
     return filepath
 
 
+def _workspace_folder(*parts):
+    """Each workspace keeps its files in its own folder: uploads/<workspace id>/..."""
+    return os.path.join(current_app.config['UPLOAD_FOLDER'], str(g.workspace_id), *parts)
+
+
 def _serve_upload(path):
     """Sends a stored upload, refusing anything outside the uploads folder."""
     if not path:
@@ -68,7 +74,7 @@ def upload_file():
     if error:
         return jsonify({"error": error}), 400
 
-    filepath = _save_upload(file, current_app.config['UPLOAD_FOLDER'])
+    filepath = _save_upload(file, _workspace_folder())
 
     extracted_data = parse_receipt_image_to_json(filepath)
 
@@ -77,7 +83,7 @@ def upload_file():
         return jsonify({"error": extracted_data["error"]}), 400
 
     duplicate_id = find_duplicate_receipt(
-        extracted_data.get('invoice_number'), extracted_data.get('store_name'), extracted_data.get('item_name')
+        g.workspace_id, extracted_data.get('invoice_number'), extracted_data.get('store_name'), extracted_data.get('item_name')
     )
     if duplicate_id:
         os.remove(filepath)
@@ -87,7 +93,7 @@ def upload_file():
         }), 409
 
     extracted_data['file_path'] = filepath
-    success = save_receipt_to_db(extracted_data)
+    success = save_receipt_to_db(g.workspace_id, extracted_data)
 
     if success:
         return jsonify(extracted_data)
@@ -97,7 +103,7 @@ def upload_file():
 
 @receipts_bp.route('/api/inventory', methods=['GET'])
 def get_inventory():
-    items, total, active, alerts = get_inventory_analytics()
+    items, total, active, alerts = get_inventory_analytics(g.workspace_id)
     return jsonify({
         'items': items,
         'total_spent': round(total, 2),
@@ -109,20 +115,22 @@ def get_inventory():
 
 @receipts_bp.route('/files/receipt/<int:item_id>')
 def receipt_file(item_id):
-    file_path, _ = get_appliance_file_paths(item_id)
+    file_path, _ = get_appliance_file_paths(g.workspace_id, item_id)
     return _serve_upload(file_path)
 
 
 @receipts_bp.route('/files/warranty-card/<int:item_id>')
 def warranty_card_file(item_id):
-    _, warranty_card_path = get_appliance_file_paths(item_id)
+    _, warranty_card_path = get_appliance_file_paths(g.workspace_id, item_id)
     return _serve_upload(warranty_card_path)
 
 
 @receipts_bp.route('/api/delete/<int:item_id>', methods=['DELETE'])
 @role_required('owner', 'admin')
 def delete_item(item_id):
-    file_path, warranty_card_path = delete_appliance(item_id)
+    found, file_path, warranty_card_path = delete_appliance(g.workspace_id, item_id)
+    if not found:
+        return jsonify({'error': 'Inventory item not found'}), 404
     if file_path and os.path.exists(file_path):
         os.remove(file_path)
     if warranty_card_path and os.path.exists(warranty_card_path):
@@ -140,10 +148,13 @@ def attach_warranty_card(item_id):
     if error:
         return jsonify({"error": error}), 400
 
-    _, previous_card_path = get_appliance_file_paths(item_id)
-    filepath = _save_upload(file, current_app.config['WARRANTY_UPLOAD_FOLDER'])
+    if not item_exists(g.workspace_id, item_id):
+        return jsonify({"error": "Inventory item not found"}), 404
 
-    success = update_warranty_card(item_id, filepath)
+    _, previous_card_path = get_appliance_file_paths(g.workspace_id, item_id)
+    filepath = _save_upload(file, _workspace_folder('warranty_cards'))
+
+    success = update_warranty_card(g.workspace_id, item_id, filepath)
     if not success:
         if os.path.exists(filepath):
             os.remove(filepath)
@@ -161,6 +172,8 @@ def attach_warranty_card(item_id):
 
 @receipts_bp.route('/api/inventory/<int:item_id>/service-history', methods=['GET'])
 def service_history(item_id):
+    if not item_exists(g.workspace_id, item_id):
+        return jsonify({'error': 'Inventory item not found'}), 404
     return jsonify({
         'item_id': item_id,
         'entries': get_service_history(item_id)
@@ -169,6 +182,9 @@ def service_history(item_id):
 
 @receipts_bp.route('/api/inventory/<int:item_id>/service-history', methods=['POST'])
 def add_history_entry(item_id):
+    if not item_exists(g.workspace_id, item_id):
+        return jsonify({'error': 'Inventory item not found'}), 404
+
     payload = request.json or request.form or {}
     service_date = str(payload.get('service_date', '')).strip()
     service_type = str(payload.get('service_type', '')).strip()

@@ -78,7 +78,8 @@ GROQ_API_KEY=your_actual_groq_api_key_here
 SECRET_KEY=generate_a_secure_random_key_here
 GOOGLE_CLIENT_ID=your-google-client-id.apps.googleusercontent.com
 GOOGLE_CLIENT_SECRET=your-google-client-secret
-OWNER_EMAIL=your-email@gmail.com  # Optional: first signed-in Google account becomes Owner
+ALLOW_NEW_WORKSPACES=true        # false = invite-only site
+OWNER_EMAIL=your-email@gmail.com  # Only used when upgrading an existing install
 GROQ_VISION_MODEL=qwen/qwen3.8-27b    # Optional: must accept images
 GROQ_CHAT_MODEL=openai/gpt-oss-120b   # Optional
 ALLOW_DEV_LOGIN=false             # Set to true to sign in as the owner from 127.0.0.1 without Google
@@ -98,6 +99,23 @@ python app.py
 ```
 Open your web browser and navigate to http://127.0.0.1:5000/.
 (Note: The application will automatically generate the inventory.db database and an uploads/ folder upon its first run. Files from older versions stored in static/uploads/ are moved there automatically.)
+
+### Family Workspaces
+Anyone with a Google account can sign in. Each family gets its own private **workspace** with its own items, receipts, settings and members:
+
+1. A new person signs in and is offered to **create a workspace** (they become its owner).
+2. The owner (or an admin) invites family members by Google email from **Settings → Workspace & Members**.
+3. Invited people join automatically the next time they sign in. Someone can belong to several workspaces and switch between them from the menu in the top-right corner.
+
+Roles: **Owner** (everything, including renaming the workspace and adding admins), **Admin** (delete items, change settings, invite members), **Member** (view, upload receipts, chat). Chat history is private to each person, even inside a shared workspace.
+
+Upgrading from a version without workspaces is automatic: existing data becomes the first workspace, owned by `OWNER_EMAIL` (or the previous owner).
+
+### Running the Tests
+```
+python -m unittest discover -s tests -v
+```
+The tests use a throwaway database and never call Groq. They check that families cannot see or change each other's data.
 
 ### Project Architecture
 * **app.py:** The main Flask server. It routes web traffic, handles API requests from the frontend, and manages file uploads.

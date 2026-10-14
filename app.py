@@ -9,8 +9,18 @@ load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), '.env'), ov
 
 from flask import Flask, g, jsonify, redirect, request, session, url_for
 
-from database import get_all_settings, get_user_by_id, relocate_upload_paths
-from routes import auth_bp, chat_bp, init_oauth, pages_bp, receipts_bp, settings_bp
+from datetime import timedelta
+
+from database import (
+    accept_pending_invites,
+    get_all_settings,
+    get_membership_role,
+    get_user_by_id,
+    get_user_workspaces,
+    get_workspace,
+    relocate_upload_paths,
+)
+from routes import auth_bp, chat_bp, init_oauth, pages_bp, receipts_bp, settings_bp, workspaces_bp
 
 app = Flask(__name__)
 
@@ -23,6 +33,9 @@ app.secret_key = secret_key
 
 app.config['SESSION_COOKIE_HTTPONLY'] = True
 app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
+app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(days=30)
+# On a hosted (https) install set SESSION_COOKIE_SECURE=true so the login cookie is never sent over http.
+app.config['SESSION_COOKIE_SECURE'] = os.getenv('SESSION_COOKIE_SECURE', 'false').lower() in {'1', 'true', 'yes'}
 
 # Uploads live outside static/ so they are only served to signed-in users via /files/...
 app.config['UPLOAD_FOLDER'] = 'uploads'
@@ -71,17 +84,25 @@ app.register_blueprint(pages_bp)
 app.register_blueprint(receipts_bp)
 app.register_blueprint(chat_bp)
 app.register_blueprint(settings_bp)
+app.register_blueprint(workspaces_bp)
+
+# Paths a signed-in person may use before they belong to any workspace.
+NO_WORKSPACE_PATHS = ('/welcome', '/api/workspaces', '/api/auth/me')
 
 
 @app.before_request
 def enforce_authentication():
-    """Protects all pages and APIs behind authentication."""
+    """Protects all pages and APIs: requires a signed-in person and resolves their current workspace."""
     g.current_user = None
+    g.workspace = None
+    g.workspace_id = None
+    g.role = None
 
     # Allow static files and auth endpoints
     if request.path == '/login' or request.path.startswith('/auth') or request.path.startswith('/static'):
         return None
 
+    is_api = request.path.startswith('/api/') or request.path == '/upload'
     user_id = session.get('user_id')
     user = get_user_by_id(user_id) if user_id else None
     if user and not user.get('is_active'):
@@ -90,16 +111,38 @@ def enforce_authentication():
     if not user:
         # Drop sessions belonging to removed or deactivated users
         session.clear()
-
-        # API or upload requests return 401 JSON
-        if request.path.startswith('/api/') or request.path == '/upload':
+        if is_api:
             return jsonify({'error': 'Unauthorized. Please sign in.'}), 401
-
-        # Page requests redirect to /login with target next url
         next_target = request.full_path if request.query_string else request.path
         return redirect(url_for('auth.login_page', next=next_target))
 
     g.current_user = user
+
+    # Invites sent while someone is already signed in take effect on their next request.
+    accept_pending_invites(user)
+
+    workspace_id = session.get('workspace_id')
+    role = get_membership_role(workspace_id, user['id']) if workspace_id else None
+    if role is None:
+        # Not (or no longer) a member of the remembered workspace: fall back to another one.
+        workspaces = get_user_workspaces(user['id'])
+        if workspaces:
+            workspace_id, role = workspaces[0]['id'], workspaces[0]['role']
+            session['workspace_id'] = workspace_id
+        else:
+            workspace_id = None
+            session.pop('workspace_id', None)
+
+    if workspace_id is None:
+        if request.path.startswith(NO_WORKSPACE_PATHS):
+            return None
+        if is_api:
+            return jsonify({'error': 'Create or join a workspace first.', 'code': 'no_workspace'}), 403
+        return redirect(url_for('workspaces.welcome_page'))
+
+    g.workspace_id = workspace_id
+    g.workspace = get_workspace(workspace_id)
+    g.role = role
     return None
 
 
@@ -111,17 +154,22 @@ def file_too_large(_error):
 
 @app.context_processor
 def inject_current_user():
-    """Makes current_user available across all Jinja2 templates."""
+    """Makes the signed-in person, their workspace and role available across all Jinja2 templates."""
     user = g.get('current_user')
-    if user is None and session.get('user_id'):
-        user = get_user_by_id(session['user_id'])
+    workspace_id = g.get('workspace_id')
 
     # Rendered onto <body> so pages arrive with the right theme, accent and density (no flash of defaults).
     ui = {'theme_mode': 'system', 'accent_color': 'blue', 'density': 'comfortable', 'reduced_motion': '0'}
-    if user:
-        settings = get_all_settings()
+    if workspace_id:
+        settings = get_all_settings(workspace_id)
         ui = {key: settings.get(key, default) for key, default in ui.items()}
-    return {'current_user': user, 'ui': ui}
+    return {
+        'current_user': user,
+        'current_workspace': g.get('workspace'),
+        'current_role': g.get('role'),
+        'my_workspaces': get_user_workspaces(user['id']) if user else [],
+        'ui': ui,
+    }
 
 
 if __name__ == '__main__':

@@ -2,7 +2,7 @@ import os
 import smtplib
 from email.message import EmailMessage
 
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, g, jsonify, request
 
 from database import CURRENCY_SYMBOLS, get_all_settings, get_inventory_analytics, set_setting_value
 from .auth import role_required
@@ -50,7 +50,7 @@ def _parse_recipients(raw_value):
 
 @settings_bp.route('/api/settings', methods=['GET'])
 def get_settings():
-    return jsonify({'settings': get_all_settings()})
+    return jsonify({'settings': get_all_settings(g.workspace_id)})
 
 
 @settings_bp.route('/api/settings', methods=['PUT'])
@@ -117,35 +117,35 @@ def update_settings():
     if warranty_period_days < 1 or warranty_period_days > 3650:
         return jsonify({'error': 'warranty_period_days must be between 1 and 3650'}), 400
 
-    set_setting_value('timezone', timezone)
-    set_setting_value('currency_code', currency_code)
-    set_setting_value('currency_symbol', currency_symbol)
-    set_setting_value('warranty_period_days', warranty_period_days)
-    set_setting_value('theme_mode', theme_mode)
-    set_setting_value('accent_color', accent_color)
-    set_setting_value('date_format', date_format)
-    set_setting_value('time_format', time_format)
-    set_setting_value('reduced_motion', reduced_motion)
-    set_setting_value('density', density)
-    set_setting_value('expiry_alert_days', expiry_alert_days)
-    set_setting_value('reminders_enabled', reminders_enabled)
-    set_setting_value('reminder_days_before', reminder_days_before)
-    set_setting_value('reminder_recipients', reminder_recipients)
-    set_setting_value('reminder_subject', reminder_subject)
-    set_setting_value('reminder_body', reminder_body)
-    set_setting_value('smtp_host', smtp_host)
-    set_setting_value('smtp_port', smtp_port)
-    set_setting_value('smtp_username', smtp_username)
-    set_setting_value('smtp_sender_email', smtp_sender_email)
+    set_setting_value(g.workspace_id, 'timezone', timezone)
+    set_setting_value(g.workspace_id, 'currency_code', currency_code)
+    set_setting_value(g.workspace_id, 'currency_symbol', currency_symbol)
+    set_setting_value(g.workspace_id, 'warranty_period_days', warranty_period_days)
+    set_setting_value(g.workspace_id, 'theme_mode', theme_mode)
+    set_setting_value(g.workspace_id, 'accent_color', accent_color)
+    set_setting_value(g.workspace_id, 'date_format', date_format)
+    set_setting_value(g.workspace_id, 'time_format', time_format)
+    set_setting_value(g.workspace_id, 'reduced_motion', reduced_motion)
+    set_setting_value(g.workspace_id, 'density', density)
+    set_setting_value(g.workspace_id, 'expiry_alert_days', expiry_alert_days)
+    set_setting_value(g.workspace_id, 'reminders_enabled', reminders_enabled)
+    set_setting_value(g.workspace_id, 'reminder_days_before', reminder_days_before)
+    set_setting_value(g.workspace_id, 'reminder_recipients', reminder_recipients)
+    set_setting_value(g.workspace_id, 'reminder_subject', reminder_subject)
+    set_setting_value(g.workspace_id, 'reminder_body', reminder_body)
+    set_setting_value(g.workspace_id, 'smtp_host', smtp_host)
+    set_setting_value(g.workspace_id, 'smtp_port', smtp_port)
+    set_setting_value(g.workspace_id, 'smtp_username', smtp_username)
+    set_setting_value(g.workspace_id, 'smtp_sender_email', smtp_sender_email)
 
-    return jsonify({'message': 'Settings updated successfully', 'settings': get_all_settings()})
+    return jsonify({'message': 'Settings updated successfully', 'settings': get_all_settings(g.workspace_id)})
 
 
 @settings_bp.route('/api/reminders/send', methods=['POST'])
 @role_required('owner', 'admin')
 def send_reminders_now():
-    settings = get_all_settings()
-    items, _, _, _ = get_inventory_analytics()
+    settings = get_all_settings(g.workspace_id)
+    items, _, _, _ = get_inventory_analytics(g.workspace_id)
 
     try:
         reminder_days_before = max(0, int(settings.get('reminder_days_before', '30')))

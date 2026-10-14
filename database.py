@@ -1,9 +1,10 @@
+import os
 import re
 import sqlite3
 import threading
 from datetime import datetime, timedelta
 
-DB_PATH = 'inventory.db'
+DB_PATH = os.getenv('DATABASE_PATH', 'inventory.db')
 _local = threading.local()
 
 
@@ -61,6 +62,20 @@ DEFAULT_SETTINGS = {
     'smtp_sender_email': ''
 }
 
+WORKSPACE_ROLES = ('owner', 'admin', 'member')
+
+
+def _add_column(table, column_sql):
+    try:
+        cursor.execute(f'ALTER TABLE {table} ADD COLUMN {column_sql}')
+    except sqlite3.OperationalError:
+        pass  # column already exists
+
+
+# ---------------------------------------------------------------------------
+# Schema
+# ---------------------------------------------------------------------------
+
 # Upgraded to v5 to include invoice_number
 cursor.execute('''
     CREATE TABLE IF NOT EXISTS appliances_v5 (
@@ -74,7 +89,6 @@ cursor.execute('''
         warranty_card_path TEXT
     )
 ''')
-conn.commit()
 
 cursor.execute('''
     CREATE TABLE IF NOT EXISTS chat_messages (
@@ -85,7 +99,6 @@ cursor.execute('''
         created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     )
 ''')
-conn.commit()
 
 cursor.execute('''
     CREATE TABLE IF NOT EXISTS service_history (
@@ -100,22 +113,14 @@ cursor.execute('''
         created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     )
 ''')
-conn.commit()
 
+# Settings from before workspaces existed; kept read-only so older versions of the app still work.
 cursor.execute('''
     CREATE TABLE IF NOT EXISTS app_settings (
         key TEXT PRIMARY KEY,
         value TEXT NOT NULL
     )
 ''')
-conn.commit()
-
-for _key, _value in DEFAULT_SETTINGS.items():
-    cursor.execute(
-        'INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)',
-        (_key, _value)
-    )
-conn.commit()
 
 cursor.execute('''
     CREATE TABLE IF NOT EXISTS users (
@@ -130,34 +135,61 @@ cursor.execute('''
         last_login TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     )
 ''')
-conn.commit()
 
-try:
-    cursor.execute('ALTER TABLE chat_messages ADD COLUMN conversation_id TEXT NOT NULL DEFAULT ""')
-except sqlite3.OperationalError:
-    pass
+# A workspace is one family's private space: its own items, settings, members and chats.
+cursor.execute('''
+    CREATE TABLE IF NOT EXISTS workspaces (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        created_by INTEGER,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )
+''')
+
+cursor.execute('''
+    CREATE TABLE IF NOT EXISTS workspace_members (
+        workspace_id INTEGER NOT NULL,
+        user_id INTEGER NOT NULL,
+        role TEXT NOT NULL DEFAULT 'member',
+        joined_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (workspace_id, user_id)
+    )
+''')
+
+cursor.execute('''
+    CREATE TABLE IF NOT EXISTS workspace_invites (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        workspace_id INTEGER NOT NULL,
+        email TEXT NOT NULL,
+        role TEXT NOT NULL DEFAULT 'member',
+        invited_by INTEGER,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE (workspace_id, email)
+    )
+''')
+
+cursor.execute('''
+    CREATE TABLE IF NOT EXISTS workspace_settings (
+        workspace_id INTEGER NOT NULL,
+        key TEXT NOT NULL,
+        value TEXT NOT NULL,
+        PRIMARY KEY (workspace_id, key)
+    )
+''')
+
+_add_column('chat_messages', 'conversation_id TEXT NOT NULL DEFAULT ""')
+_add_column('appliances_v5', 'has_warranty_card INTEGER DEFAULT 0')
+_add_column('appliances_v5', 'warranty_card_path TEXT')
+_add_column('appliances_v5', 'workspace_id INTEGER')
+_add_column('chat_messages', 'workspace_id INTEGER')
+_add_column('chat_messages', 'user_id INTEGER')
 
 cursor.execute("UPDATE chat_messages SET conversation_id = 'legacy' WHERE conversation_id IS NULL OR conversation_id = ''")
-conn.commit()
-
-# Lightweight migration for existing inventories created before warranty-card columns were introduced.
-try:
-    cursor.execute('ALTER TABLE appliances_v5 ADD COLUMN has_warranty_card INTEGER DEFAULT 0')
-except sqlite3.OperationalError:
-    pass
-
-try:
-    cursor.execute('ALTER TABLE appliances_v5 ADD COLUMN warranty_card_path TEXT')
-except sqlite3.OperationalError:
-    pass
-
-conn.commit()
-
-try:
-    cursor.execute('CREATE INDEX IF NOT EXISTS idx_service_history_item_id ON service_history(item_id)')
-except sqlite3.OperationalError:
-    pass
-
+cursor.execute('CREATE INDEX IF NOT EXISTS idx_service_history_item_id ON service_history(item_id)')
+cursor.execute('CREATE INDEX IF NOT EXISTS idx_appliances_workspace ON appliances_v5(workspace_id)')
+cursor.execute('CREATE INDEX IF NOT EXISTS idx_chat_owner ON chat_messages(workspace_id, user_id, conversation_id)')
+cursor.execute('CREATE INDEX IF NOT EXISTS idx_members_user ON workspace_members(user_id)')
+cursor.execute('CREATE INDEX IF NOT EXISTS idx_invites_email ON workspace_invites(email)')
 conn.commit()
 
 # Earlier extractions stored placeholders such as "not found"; store them as empty instead.
@@ -181,65 +213,328 @@ cursor.execute('''
 conn.commit()
 
 
-def save_receipt_to_db(data):
-    if "error" in data: return False
-    has_warranty_card = 1 if data.get("warranty_card_path") else 0
+# ---------------------------------------------------------------------------
+# Users
+# ---------------------------------------------------------------------------
+
+_USER_COLUMNS = 'id, google_id, email, name, picture, role, is_active, created_at, last_login'
+
+
+def _row_to_user(row):
+    if not row:
+        return None
+    return {
+        'id': row[0],
+        'google_id': row[1],
+        'email': row[2],
+        'name': row[3],
+        'picture': row[4],
+        'is_active': bool(row[6]),
+        'created_at': row[7],
+        'last_login': row[8],
+    }
+
+
+def get_user_by_id(user_id):
+    cursor.execute(f'SELECT {_USER_COLUMNS} FROM users WHERE id = ?', (user_id,))
+    return _row_to_user(cursor.fetchone())
+
+
+def get_user_by_email(email):
+    if not email:
+        return None
+    cursor.execute(f'SELECT {_USER_COLUMNS} FROM users WHERE LOWER(email) = LOWER(?)', (email.strip(),))
+    return _row_to_user(cursor.fetchone())
+
+
+def upsert_user(google_id, email, name=None, picture=None):
+    clean_email = email.strip().lower()
+    user = get_user_by_email(clean_email)
+    now = datetime.now().isoformat()
+    if user:
+        cursor.execute('''
+            UPDATE users
+            SET google_id = COALESCE(?, google_id),
+                name = COALESCE(?, name),
+                picture = COALESCE(?, picture),
+                last_login = ?
+            WHERE id = ?
+        ''', (google_id, name, picture, now, user['id']))
+        conn.commit()
+        return get_user_by_id(user['id'])
 
     cursor.execute('''
-        INSERT INTO appliances_v5 (
-            item_name, brand, model_number, serial_number, category, date_of_purchase, 
-            price, tax_amount, total_amount, payment_method, 
-            store_name, store_contact, warranty_info, return_policy, invoice_number, file_path,
-            has_warranty_card, warranty_card_path
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    ''', (
-        data.get("item_name"), data.get("brand"), data.get("model_number"), data.get("serial_number"),
-        data.get("category"), data.get("date_of_purchase"), data.get("price"),
-        data.get("tax_amount"), data.get("total_amount"), data.get("payment_method"),
-        data.get("store_name"), data.get("store_contact"), data.get("warranty_info"), 
-        data.get("return_policy"), data.get("invoice_number"), data.get("file_path"),
-        has_warranty_card, data.get("warranty_card_path")
-    ))
+        INSERT INTO users (google_id, email, name, picture, role, is_active, created_at, last_login)
+        VALUES (?, ?, ?, ?, 'member', 1, ?, ?)
+    ''', (google_id, clean_email, name or clean_email, picture or '', now, now))
     conn.commit()
-    return True
+    return get_user_by_id(cursor.lastrowid)
 
-def find_duplicate_receipt(invoice_number, store_name, item_name):
-    """Returns the id of an item already saved from the same invoice, or None."""
-    if not invoice_number:
-        return None
+
+# ---------------------------------------------------------------------------
+# Workspaces, members and invites
+# ---------------------------------------------------------------------------
+
+def create_workspace(name, owner_user_id):
+    """Creates a workspace with owner_user_id as its owner and returns its id."""
+    cursor.execute('SELECT COUNT(*) FROM workspaces')
+    is_first_workspace = cursor.fetchone()[0] == 0
+
     cursor.execute(
-        '''
-        SELECT id FROM appliances_v5
-        WHERE LOWER(TRIM(invoice_number)) = LOWER(TRIM(?))
-          AND LOWER(TRIM(COALESCE(store_name, ''))) = LOWER(TRIM(COALESCE(?, '')))
-          AND LOWER(TRIM(COALESCE(item_name, ''))) = LOWER(TRIM(COALESCE(?, '')))
-        LIMIT 1
-        ''',
-        (invoice_number, store_name, item_name)
+        'INSERT INTO workspaces (name, created_by, created_at) VALUES (?, ?, ?)',
+        (name.strip(), owner_user_id, datetime.now().isoformat())
+    )
+    workspace_id = cursor.lastrowid
+    cursor.execute(
+        "INSERT INTO workspace_members (workspace_id, user_id, role, joined_at) VALUES (?, ?, 'owner', ?)",
+        (workspace_id, owner_user_id, datetime.now().isoformat())
+    )
+
+    if is_first_workspace:
+        # Data saved before workspaces existed belongs to the first workspace created on this install.
+        _adopt_unassigned_data(workspace_id, owner_user_id)
+    conn.commit()
+    return workspace_id
+
+
+def _adopt_unassigned_data(workspace_id, owner_user_id):
+    cursor.execute('UPDATE appliances_v5 SET workspace_id = ? WHERE workspace_id IS NULL', (workspace_id,))
+    cursor.execute(
+        'UPDATE chat_messages SET workspace_id = ?, user_id = COALESCE(user_id, ?) WHERE workspace_id IS NULL',
+        (workspace_id, owner_user_id)
+    )
+    cursor.execute('SELECT key, value FROM app_settings')
+    for key, value in cursor.fetchall():
+        cursor.execute(
+            'INSERT OR IGNORE INTO workspace_settings (workspace_id, key, value) VALUES (?, ?, ?)',
+            (workspace_id, key, value)
+        )
+
+
+def get_workspace(workspace_id):
+    cursor.execute('SELECT id, name, created_by, created_at FROM workspaces WHERE id = ?', (workspace_id,))
+    row = cursor.fetchone()
+    return {'id': row[0], 'name': row[1], 'created_by': row[2], 'created_at': row[3]} if row else None
+
+
+def rename_workspace(workspace_id, name):
+    cursor.execute('UPDATE workspaces SET name = ? WHERE id = ?', (name.strip(), workspace_id))
+    conn.commit()
+    return cursor.rowcount > 0
+
+
+def get_user_workspaces(user_id):
+    """Workspaces the user belongs to, oldest membership first."""
+    cursor.execute('''
+        SELECT w.id, w.name, m.role
+        FROM workspace_members m
+        JOIN workspaces w ON w.id = m.workspace_id
+        WHERE m.user_id = ?
+        ORDER BY m.joined_at ASC, w.id ASC
+    ''', (user_id,))
+    return [{'id': row[0], 'name': row[1], 'role': row[2]} for row in cursor.fetchall()]
+
+
+def get_membership_role(workspace_id, user_id):
+    cursor.execute(
+        'SELECT role FROM workspace_members WHERE workspace_id = ? AND user_id = ?',
+        (workspace_id, user_id)
     )
     row = cursor.fetchone()
     return row[0] if row else None
 
 
-def get_all_appliances():
-    cursor.execute('SELECT * FROM appliances_v5')
+def list_workspace_members(workspace_id):
+    cursor.execute(f'''
+        SELECT {', '.join('u.' + c.strip() for c in _USER_COLUMNS.split(','))}, m.role, m.joined_at
+        FROM workspace_members m
+        JOIN users u ON u.id = m.user_id
+        WHERE m.workspace_id = ?
+        ORDER BY CASE m.role WHEN 'owner' THEN 0 WHEN 'admin' THEN 1 ELSE 2 END, m.joined_at ASC
+    ''', (workspace_id,))
+    members = []
+    for row in cursor.fetchall():
+        user = _row_to_user(row[:9])
+        user['role'] = row[9]
+        user['joined_at'] = row[10]
+        members.append(user)
+    return members
+
+
+def add_workspace_member(workspace_id, user_id, role='member'):
+    cursor.execute(
+        'INSERT OR IGNORE INTO workspace_members (workspace_id, user_id, role, joined_at) VALUES (?, ?, ?, ?)',
+        (workspace_id, user_id, role, datetime.now().isoformat())
+    )
+    conn.commit()
+
+
+def remove_workspace_member(workspace_id, user_id):
+    role = get_membership_role(workspace_id, user_id)
+    if role is None:
+        return False, 'This person is not a member of the workspace'
+    if role == 'owner':
+        return False, 'The workspace owner cannot be removed'
+    cursor.execute('DELETE FROM workspace_members WHERE workspace_id = ? AND user_id = ?', (workspace_id, user_id))
+    conn.commit()
+    return True, 'Member removed'
+
+
+def create_invite(workspace_id, email, role, invited_by):
+    """Invites an email address into a workspace. Returns (invite, error)."""
+    clean_email = email.strip().lower()
+    existing_user = get_user_by_email(clean_email)
+    if existing_user and get_membership_role(workspace_id, existing_user['id']):
+        return None, f'{clean_email} is already a member of this workspace'
+    try:
+        cursor.execute(
+            'INSERT INTO workspace_invites (workspace_id, email, role, invited_by, created_at) VALUES (?, ?, ?, ?, ?)',
+            (workspace_id, clean_email, role, invited_by, datetime.now().isoformat())
+        )
+    except sqlite3.IntegrityError:
+        return None, f'{clean_email} has already been invited'
+    conn.commit()
+    return {'id': cursor.lastrowid, 'email': clean_email, 'role': role}, None
+
+
+def list_invites(workspace_id):
+    cursor.execute(
+        'SELECT id, email, role, created_at FROM workspace_invites WHERE workspace_id = ? ORDER BY created_at ASC',
+        (workspace_id,)
+    )
+    return [{'id': row[0], 'email': row[1], 'role': row[2], 'created_at': row[3]} for row in cursor.fetchall()]
+
+
+def delete_invite(workspace_id, invite_id):
+    cursor.execute('DELETE FROM workspace_invites WHERE id = ? AND workspace_id = ?', (invite_id, workspace_id))
+    conn.commit()
+    return cursor.rowcount > 0
+
+
+def accept_pending_invites(user):
+    """Turns any invites for the user's email into memberships. Returns the workspace ids joined."""
+    cursor.execute('SELECT id, workspace_id, role FROM workspace_invites WHERE email = ?', (user['email'].lower(),))
+    invites = cursor.fetchall()
+    joined = []
+    for invite_id, workspace_id, role in invites:
+        cursor.execute(
+            'INSERT OR IGNORE INTO workspace_members (workspace_id, user_id, role, joined_at) VALUES (?, ?, ?, ?)',
+            (workspace_id, user['id'], role, datetime.now().isoformat())
+        )
+        cursor.execute('DELETE FROM workspace_invites WHERE id = ?', (invite_id,))
+        joined.append(workspace_id)
+    if invites:
+        conn.commit()
+    return joined
+
+
+def _migrate_existing_install():
+    """One-time upgrade: turns a single-family install (users with global roles) into its first workspace."""
+    cursor.execute('SELECT COUNT(*) FROM workspaces')
+    if cursor.fetchone()[0]:
+        return
+
+    cursor.execute('SELECT id, email, name, role FROM users WHERE is_active = 1 ORDER BY id ASC')
+    users = cursor.fetchall()
+    if not users:
+        return  # fresh install: the first person to sign in creates the first workspace
+
+    owner_email = os.getenv('OWNER_EMAIL', '').strip().lower()
+    owner = (next((u for u in users if u[1].lower() == owner_email), None)
+             or next((u for u in users if u[3] == 'owner'), None)
+             or users[0])
+    first_name = (owner[2] or owner[1].split('@')[0]).split()[0]
+    workspace_id = create_workspace(f"{first_name}'s Family", owner[0])
+
+    for user_id, _email, _name, role in users:
+        if user_id == owner[0]:
+            continue
+        member_role = 'admin' if role in ('owner', 'admin') else 'member'
+        add_workspace_member(workspace_id, user_id, member_role)
+    conn.commit()
+
+
+_migrate_existing_install()
+
+
+# ---------------------------------------------------------------------------
+# Inventory (always scoped to a workspace)
+# ---------------------------------------------------------------------------
+
+def save_receipt_to_db(workspace_id, data):
+    if "error" in data: return False
+    has_warranty_card = 1 if data.get("warranty_card_path") else 0
+
+    cursor.execute('''
+        INSERT INTO appliances_v5 (
+            item_name, brand, model_number, serial_number, category, date_of_purchase,
+            price, tax_amount, total_amount, payment_method,
+            store_name, store_contact, warranty_info, return_policy, invoice_number, file_path,
+            has_warranty_card, warranty_card_path, workspace_id
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ''', (
+        data.get("item_name"), data.get("brand"), data.get("model_number"), data.get("serial_number"),
+        data.get("category"), data.get("date_of_purchase"), data.get("price"),
+        data.get("tax_amount"), data.get("total_amount"), data.get("payment_method"),
+        data.get("store_name"), data.get("store_contact"), data.get("warranty_info"),
+        data.get("return_policy"), data.get("invoice_number"), data.get("file_path"),
+        has_warranty_card, data.get("warranty_card_path"), workspace_id
+    ))
+    conn.commit()
+    return True
+
+
+def find_duplicate_receipt(workspace_id, invoice_number, store_name, item_name):
+    """Returns the id of an item already saved from the same invoice in this workspace, or None."""
+    if not invoice_number:
+        return None
+    cursor.execute(
+        '''
+        SELECT id FROM appliances_v5
+        WHERE workspace_id = ?
+          AND LOWER(TRIM(invoice_number)) = LOWER(TRIM(?))
+          AND LOWER(TRIM(COALESCE(store_name, ''))) = LOWER(TRIM(COALESCE(?, '')))
+          AND LOWER(TRIM(COALESCE(item_name, ''))) = LOWER(TRIM(COALESCE(?, '')))
+        LIMIT 1
+        ''',
+        (workspace_id, invoice_number, store_name, item_name)
+    )
+    row = cursor.fetchone()
+    return row[0] if row else None
+
+
+def get_all_appliances(workspace_id):
+    cursor.execute('SELECT * FROM appliances_v5 WHERE workspace_id = ? ORDER BY id ASC', (workspace_id,))
     rows = cursor.fetchall()
     columns = [description[0] for description in cursor.description]
     return columns, rows
 
-def delete_appliance(item_id):
-    cursor.execute('SELECT file_path, warranty_card_path FROM appliances_v5 WHERE id = ?', (item_id,))
+
+def item_exists(workspace_id, item_id):
+    cursor.execute('SELECT 1 FROM appliances_v5 WHERE id = ? AND workspace_id = ?', (item_id, workspace_id))
+    return cursor.fetchone() is not None
+
+
+def delete_appliance(workspace_id, item_id):
+    """Deletes an item in this workspace. Returns (found, file_path, warranty_card_path)."""
+    cursor.execute(
+        'SELECT file_path, warranty_card_path FROM appliances_v5 WHERE id = ? AND workspace_id = ?',
+        (item_id, workspace_id)
+    )
     row = cursor.fetchone()
-    file_path = row[0] if row else None
-    warranty_card_path = row[1] if row else None
-    cursor.execute('DELETE FROM appliances_v5 WHERE id = ?', (item_id,))
+    if not row:
+        return False, None, None
+    cursor.execute('DELETE FROM appliances_v5 WHERE id = ? AND workspace_id = ?', (item_id, workspace_id))
     cursor.execute('DELETE FROM service_history WHERE item_id = ?', (item_id,))
     conn.commit()
-    return file_path, warranty_card_path
+    return True, row[0], row[1]
 
 
-def get_appliance_file_paths(item_id):
-    cursor.execute('SELECT file_path, warranty_card_path FROM appliances_v5 WHERE id = ?', (item_id,))
+def get_appliance_file_paths(workspace_id, item_id):
+    cursor.execute(
+        'SELECT file_path, warranty_card_path FROM appliances_v5 WHERE id = ? AND workspace_id = ?',
+        (item_id, workspace_id)
+    )
     row = cursor.fetchone()
     return (row[0], row[1]) if row else (None, None)
 
@@ -278,39 +573,38 @@ def parse_amount(value):
         return None
 
 
-def update_warranty_card(item_id, warranty_card_path):
+def update_warranty_card(workspace_id, item_id, warranty_card_path):
     cursor.execute(
         '''
         UPDATE appliances_v5
         SET has_warranty_card = 1,
             warranty_card_path = ?
-        WHERE id = ?
+        WHERE id = ? AND workspace_id = ?
         ''',
-        (warranty_card_path, item_id)
+        (warranty_card_path, item_id, workspace_id)
     )
     conn.commit()
     return cursor.rowcount > 0
 
-def get_inventory_analytics():
-    columns, rows = get_all_appliances()
+
+def get_inventory_analytics(workspace_id):
+    columns, rows = get_all_appliances(workspace_id)
     items = [dict(zip(columns, row)) for row in rows]
     total_spent = 0.0
     active_warranties = 0
-    warranty_period_days = 365
-    alert_window_days = 30
 
     try:
-        warranty_period_days = max(1, int(get_setting_value('warranty_period_days', '365')))
-    except Exception:
+        warranty_period_days = max(1, int(get_setting_value(workspace_id, 'warranty_period_days', '365')))
+    except (TypeError, ValueError):
         warranty_period_days = 365
 
     try:
-        alert_window_days = max(0, int(get_setting_value('expiry_alert_days', '30')))
-    except Exception:
+        alert_window_days = max(0, int(get_setting_value(workspace_id, 'expiry_alert_days', '30')))
+    except (TypeError, ValueError):
         alert_window_days = 30
 
     alerts = []
-    
+
     for item in items:
         amount = parse_amount(item.get('total_amount'))
         if amount is not None:
@@ -364,6 +658,7 @@ def get_inventory_analytics():
 
 
 def add_service_history_entry(item_id, service_date, service_type, vendor='', cost='', notes='', next_service_date=''):
+    """Callers must check the item belongs to their workspace first (item_exists)."""
     cursor.execute(
         '''
         INSERT INTO service_history (
@@ -377,6 +672,7 @@ def add_service_history_entry(item_id, service_date, service_type, vendor='', co
 
 
 def get_service_history(item_id):
+    """Callers must check the item belongs to their workspace first (item_exists)."""
     cursor.execute(
         '''
         SELECT id, item_id, service_date, service_type, vendor, cost, notes, next_service_date, created_at
@@ -403,144 +699,101 @@ def get_service_history(item_id):
     ]
 
 
-def get_service_history_summary(item_id):
-    history = get_service_history(item_id)
-    last_service = history[0] if history else None
-    return {
-        'item_id': item_id,
-        'entries': history,
-        'count': len(history),
-        'last_service': last_service
-    }
-
+# ---------------------------------------------------------------------------
+# Chat (private to each person within a workspace)
+# ---------------------------------------------------------------------------
 
 def _normalize_conversation_id(conversation_id):
     normalized = str(conversation_id or '').strip()
     return normalized if normalized else 'legacy'
 
 
-def save_chat_message(role, content, conversation_id='legacy'):
+def _rows_to_messages(rows):
+    messages = [{'id': row[0], 'role': row[1], 'content': row[2], 'created_at': row[3]} for row in rows]
+    messages.reverse()
+    return messages
+
+
+def save_chat_message(workspace_id, user_id, role, content, conversation_id='legacy'):
     if not role or content is None:
         return False
 
     cursor.execute(
-        'INSERT INTO chat_messages (conversation_id, role, content) VALUES (?, ?, ?)',
-        (_normalize_conversation_id(conversation_id), str(role), str(content))
+        'INSERT INTO chat_messages (workspace_id, user_id, conversation_id, role, content) VALUES (?, ?, ?, ?, ?)',
+        (workspace_id, user_id, _normalize_conversation_id(conversation_id), str(role), str(content))
     )
     conn.commit()
     return True
 
 
-def get_chat_messages(conversation_id='legacy', limit=100):
+def get_chat_messages(workspace_id, user_id, conversation_id='legacy', limit=100):
     safe_limit = max(1, min(int(limit), 500))
     cursor.execute(
         '''
         SELECT id, role, content, created_at
         FROM chat_messages
-        WHERE conversation_id = ?
+        WHERE workspace_id = ? AND user_id = ? AND conversation_id = ?
         ORDER BY id DESC
         LIMIT ?
         ''',
-        (_normalize_conversation_id(conversation_id), safe_limit)
+        (workspace_id, user_id, _normalize_conversation_id(conversation_id), safe_limit)
     )
-    rows = cursor.fetchall()
-
-    messages = [
-        {
-            'id': row[0],
-            'role': row[1],
-            'content': row[2],
-            'created_at': row[3]
-        }
-        for row in rows
-    ]
-    messages.reverse()
-    return messages
+    return _rows_to_messages(cursor.fetchall())
 
 
-def search_chat_messages(query, conversation_id='legacy', limit=120):
+def search_chat_messages(workspace_id, user_id, query, conversation_id='legacy', limit=120):
     safe_limit = max(1, min(int(limit), 500))
     query_text = (query or '').strip()
     if not query_text:
-        return get_chat_messages(conversation_id=conversation_id, limit=safe_limit)
+        return get_chat_messages(workspace_id, user_id, conversation_id=conversation_id, limit=safe_limit)
 
-    like_query = f"%{query_text}%"
     cursor.execute(
         '''
         SELECT id, role, content, created_at
         FROM chat_messages
-        WHERE conversation_id = ? AND content LIKE ?
+        WHERE workspace_id = ? AND user_id = ? AND conversation_id = ? AND content LIKE ?
         ORDER BY id DESC
         LIMIT ?
         ''',
-        (_normalize_conversation_id(conversation_id), like_query, safe_limit)
+        (workspace_id, user_id, _normalize_conversation_id(conversation_id), f"%{query_text}%", safe_limit)
     )
-    rows = cursor.fetchall()
-
-    messages = [
-        {
-            'id': row[0],
-            'role': row[1],
-            'content': row[2],
-            'created_at': row[3]
-        }
-        for row in rows
-    ]
-    messages.reverse()
-    return messages
+    return _rows_to_messages(cursor.fetchall())
 
 
-def get_chat_conversations(query='', limit=100):
+def get_chat_conversations(workspace_id, user_id, query='', limit=100):
     safe_limit = max(1, min(int(limit), 500))
     query_text = (query or '').strip()
     like_query = f"%{query_text}%" if query_text else None
 
     cursor.execute(
         '''
-        WITH conversation_summaries AS (
-            SELECT
-                COALESCE(NULLIF(conversation_id, ''), 'legacy') AS conversation_id,
-                MIN(id) AS first_message_id,
-                MIN(created_at) AS created_at,
-                MAX(created_at) AS updated_at,
-                COUNT(*) AS message_count
-            FROM chat_messages
-            GROUP BY COALESCE(NULLIF(conversation_id, ''), 'legacy')
+        WITH mine AS (
+            SELECT * FROM chat_messages WHERE workspace_id = ? AND user_id = ?
+        ),
+        conversation_summaries AS (
+            SELECT conversation_id, MIN(created_at) AS created_at, MAX(created_at) AS updated_at, COUNT(*) AS message_count
+            FROM mine
+            GROUP BY conversation_id
         )
         SELECT
             c.conversation_id,
             c.created_at,
             c.updated_at,
             c.message_count,
-            (
-                SELECT content
-                FROM chat_messages m1
-                WHERE COALESCE(NULLIF(m1.conversation_id, ''), 'legacy') = c.conversation_id
-                  AND m1.role = 'user'
-                ORDER BY m1.id ASC
-                LIMIT 1
-            ) AS title,
-            (
-                SELECT content
-                FROM chat_messages m2
-                WHERE COALESCE(NULLIF(m2.conversation_id, ''), 'legacy') = c.conversation_id
-                ORDER BY m2.id DESC
-                LIMIT 1
-            ) AS preview
+            (SELECT content FROM mine m1 WHERE m1.conversation_id = c.conversation_id AND m1.role = 'user'
+             ORDER BY m1.id ASC LIMIT 1) AS title,
+            (SELECT content FROM mine m2 WHERE m2.conversation_id = c.conversation_id
+             ORDER BY m2.id DESC LIMIT 1) AS preview
         FROM conversation_summaries c
         WHERE (? IS NULL OR EXISTS (
-            SELECT 1
-            FROM chat_messages m3
-            WHERE COALESCE(NULLIF(m3.conversation_id, ''), 'legacy') = c.conversation_id
-              AND m3.content LIKE ?
+            SELECT 1 FROM mine m3 WHERE m3.conversation_id = c.conversation_id AND m3.content LIKE ?
         ))
         ORDER BY c.updated_at DESC
         LIMIT ?
         ''',
-        (like_query, like_query, safe_limit)
+        (workspace_id, user_id, like_query, like_query, safe_limit)
     )
 
-    rows = cursor.fetchall()
     return [
         {
             'conversation_id': row[0],
@@ -550,155 +803,49 @@ def get_chat_conversations(query='', limit=100):
             'title': row[4],
             'preview': row[5]
         }
-        for row in rows
+        for row in cursor.fetchall()
     ]
 
 
-def clear_chat_messages(conversation_id=None):
-    if conversation_id is None:
-        cursor.execute('DELETE FROM chat_messages')
-    else:
-        cursor.execute(
-            'DELETE FROM chat_messages WHERE COALESCE(NULLIF(conversation_id, ""), "legacy") = ?',
-            (_normalize_conversation_id(conversation_id),)
-        )
+def clear_chat_messages(workspace_id, user_id):
+    """Deletes this person's chat history in this workspace (never anyone else's)."""
+    cursor.execute('DELETE FROM chat_messages WHERE workspace_id = ? AND user_id = ?', (workspace_id, user_id))
     conn.commit()
     return True
 
 
-def get_setting_value(key, default_value=None):
-    cursor.execute('SELECT value FROM app_settings WHERE key = ?', (str(key),))
+# ---------------------------------------------------------------------------
+# Settings (per workspace)
+# ---------------------------------------------------------------------------
+
+def get_setting_value(workspace_id, key, default_value=None):
+    cursor.execute(
+        'SELECT value FROM workspace_settings WHERE workspace_id = ? AND key = ?',
+        (workspace_id, str(key))
+    )
     row = cursor.fetchone()
     if row is None:
-        return default_value
+        return DEFAULT_SETTINGS.get(key, default_value) if default_value is None else default_value
     return row[0]
 
 
-def set_setting_value(key, value):
+def set_setting_value(workspace_id, key, value):
     cursor.execute(
         '''
-        INSERT INTO app_settings (key, value)
-        VALUES (?, ?)
-        ON CONFLICT(key) DO UPDATE SET value = excluded.value
+        INSERT INTO workspace_settings (workspace_id, key, value)
+        VALUES (?, ?, ?)
+        ON CONFLICT(workspace_id, key) DO UPDATE SET value = excluded.value
         ''',
-        (str(key), str(value))
+        (workspace_id, str(key), str(value))
     )
     conn.commit()
     return True
 
 
-def get_all_settings():
+def get_all_settings(workspace_id):
     result = dict(DEFAULT_SETTINGS)
-    cursor.execute('SELECT key, value FROM app_settings')
-    rows = cursor.fetchall()
-    for row in rows:
-        result[row[0]] = row[1]
+    cursor.execute('SELECT key, value FROM workspace_settings WHERE workspace_id = ?', (workspace_id,))
+    for key, value in cursor.fetchall():
+        result[key] = value
     result['currency_symbol'] = CURRENCY_SYMBOLS.get(result.get('currency_code'), result.get('currency_symbol'))
     return result
-
-
-def _row_to_user(row):
-    if not row:
-        return None
-    return {
-        'id': row[0],
-        'google_id': row[1],
-        'email': row[2],
-        'name': row[3],
-        'picture': row[4],
-        'role': row[5],
-        'is_active': bool(row[6]),
-        'created_at': row[7],
-        'last_login': row[8],
-    }
-
-
-def get_user_by_id(user_id):
-    cursor.execute('SELECT id, google_id, email, name, picture, role, is_active, created_at, last_login FROM users WHERE id = ?', (user_id,))
-    return _row_to_user(cursor.fetchone())
-
-
-def get_user_by_email(email):
-    if not email:
-        return None
-    cursor.execute('SELECT id, google_id, email, name, picture, role, is_active, created_at, last_login FROM users WHERE LOWER(email) = LOWER(?)', (email.strip(),))
-    return _row_to_user(cursor.fetchone())
-
-
-def get_user_by_google_id(google_id):
-    if not google_id:
-        return None
-    cursor.execute('SELECT id, google_id, email, name, picture, role, is_active, created_at, last_login FROM users WHERE google_id = ?', (str(google_id),))
-    return _row_to_user(cursor.fetchone())
-
-
-def get_owner_user():
-    cursor.execute('SELECT id, google_id, email, name, picture, role, is_active, created_at, last_login FROM users WHERE role = "owner" ORDER BY id ASC LIMIT 1')
-    return _row_to_user(cursor.fetchone())
-
-
-def count_users():
-    cursor.execute('SELECT COUNT(*) FROM users')
-    return cursor.fetchone()[0]
-
-
-def list_users():
-    cursor.execute('SELECT id, google_id, email, name, picture, role, is_active, created_at, last_login FROM users ORDER BY id ASC')
-    return [_row_to_user(row) for row in cursor.fetchall()]
-
-
-def upsert_user(google_id, email, name=None, picture=None, default_role='owner'):
-    clean_email = email.strip().lower()
-    user = get_user_by_email(clean_email)
-    now = datetime.now().isoformat()
-    if user:
-        cursor.execute('''
-            UPDATE users
-            SET google_id = COALESCE(?, google_id),
-                name = COALESCE(?, name),
-                picture = COALESCE(?, picture),
-                last_login = ?
-            WHERE id = ?
-        ''', (google_id, name, picture, now, user['id']))
-        conn.commit()
-        return get_user_by_id(user['id'])
-    else:
-        cursor.execute('''
-            INSERT INTO users (google_id, email, name, picture, role, is_active, created_at, last_login)
-            VALUES (?, ?, ?, ?, ?, 1, ?, ?)
-        ''', (google_id, clean_email, name or clean_email, picture or '', default_role, now, now))
-        conn.commit()
-        return get_user_by_id(cursor.lastrowid)
-
-
-def make_sole_owner(user_id):
-    """Makes user_id the workspace owner and demotes any other owners (such as the dev-login placeholder) to admin."""
-    cursor.execute("UPDATE users SET role = 'admin' WHERE role = 'owner' AND id != ?", (user_id,))
-    cursor.execute("UPDATE users SET role = 'owner', is_active = 1 WHERE id = ?", (user_id,))
-    conn.commit()
-    return get_user_by_id(user_id)
-
-
-def add_authorized_user(email, name='', role='member'):
-    clean_email = email.strip().lower()
-    existing = get_user_by_email(clean_email)
-    if existing:
-        return existing, False
-    now = datetime.now().isoformat()
-    cursor.execute('''
-        INSERT INTO users (google_id, email, name, picture, role, is_active, created_at, last_login)
-        VALUES (NULL, ?, ?, '', ?, 1, ?, ?)
-    ''', (clean_email, name.strip() or clean_email, role, now, now))
-    conn.commit()
-    return get_user_by_id(cursor.lastrowid), True
-
-
-def delete_user(user_id):
-    user = get_user_by_id(user_id)
-    if not user:
-        return False, "User not found"
-    if user['role'] == 'owner':
-        return False, "Cannot delete owner user"
-    cursor.execute('DELETE FROM users WHERE id = ?', (user_id,))
-    conn.commit()
-    return True, "User deleted successfully"

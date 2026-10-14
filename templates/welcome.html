@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Welcome | Digital Twin</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.5/font/bootstrap-icons.css">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/index.css') }}">
+    <style>
+        .login-wrapper {
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 1.5rem;
+            background: linear-gradient(135deg, rgba(15, 23, 42, 0.04) 0%, rgba(59, 130, 246, 0.06) 100%);
+        }
+        .login-card {
+            width: 100%;
+            max-width: 440px;
+            background: #ffffff;
+            border-radius: 1rem;
+            box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.08), 0 8px 10px -6px rgba(0, 0, 0, 0.04);
+            border: 1px solid rgba(226, 232, 240, 0.9);
+            overflow: hidden;
+        }
+        .login-header {
+            padding: 2.25rem 2rem 1.5rem;
+            text-align: center;
+            border-bottom: 1px solid #f1f5f9;
+        }
+        .login-logo {
+            width: 54px;
+            height: 54px;
+            border-radius: 12px;
+            background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%);
+            color: #ffffff;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.75rem;
+            margin-bottom: 1rem;
+            box-shadow: 0 4px 12px rgba(37, 99, 235, 0.25);
+        }
+        .login-body {
+            padding: 2rem;
+        }
+        .google-btn {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 12px;
+            width: 100%;
+            padding: 0.75rem 1rem;
+            font-size: 0.95rem;
+            font-weight: 500;
+            color: #1f2937;
+            background-color: #ffffff;
+            border: 1px solid #d1d5db;
+            border-radius: 0.5rem;
+            transition: all 0.2s ease-in-out;
+            text-decoration: none;
+            box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+        }
+        .google-btn:hover {
+            background-color: #f9fafb;
+            border-color: #9ca3af;
+            color: #111827;
+            box-shadow: 0 2px 4px 0 rgba(0, 0, 0, 0.08);
+        }
+        .google-icon {
+            width: 20px;
+            height: 20px;
+        }
+        .workspace-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 0.35rem 0.75rem;
+            border-radius: 9999px;
+            font-size: 0.78rem;
+            font-weight: 500;
+            background: #eff6ff;
+            color: #1d4ed8;
+            margin-top: 0.5rem;
+        }
+        .setup-note {
+            background-color: #f8fafc;
+            border: 1px dashed #cbd5e1;
+            border-radius: 0.5rem;
+            padding: 0.85rem;
+            font-size: 0.82rem;
+            color: #475569;
+        }
+    </style>
+    <style>
+        .welcome-option { border: 1px solid var(--line); border-radius: 14px; padding: 1rem; }
+        .welcome-option + .welcome-option { margin-top: 0.75rem; }
+    </style>
+</head>
+<body>
+    <div class="login-wrapper">
+        <div class="login-card">
+            <div class="login-header">
+                <div class="login-logo">
+                    <i class="bi bi-house-heart"></i>
+                </div>
+                <h4 class="fw-bold mb-1 text-dark">Welcome, {{ user.name.split(' ')[0] if user.name else 'there' }}!</h4>
+                <p class="text-muted small mb-0">Signed in as {{ user.email }}</p>
+            </div>
+
+            <div class="login-body">
+                {% if can_create %}
+                <form class="welcome-option" id="welcomeCreateForm">
+                    <div class="fw-semibold mb-1"><i class="bi bi-plus-circle me-1"></i> Start your family's workspace</div>
+                    <p class="small text-muted mb-2">You'll be its owner and can invite your family by email. Nobody else can see what's inside.</p>
+                    <label class="form-label small fw-semibold" for="welcomeWorkspaceName">Workspace name</label>
+                    <input id="welcomeWorkspaceName" class="form-control mb-2" maxlength="60" value="{{ suggested_name }}" required>
+                    <button type="submit" class="btn btn-primary w-100" id="welcomeCreateBtn">Create workspace</button>
+                    <div class="small text-danger mt-2 d-none" id="welcomeError" role="alert"></div>
+                </form>
+                {% endif %}
+
+                <div class="welcome-option">
+                    <div class="fw-semibold mb-1"><i class="bi bi-envelope-open me-1"></i> Joining your family?</div>
+                    <p class="small text-muted mb-2">Ask the person who owns your family's workspace to invite <strong>{{ user.email }}</strong> from Settings, then refresh this page.</p>
+                    <button type="button" class="btn btn-outline-secondary btn-sm" onclick="window.location.reload()"><i class="bi bi-arrow-clockwise"></i> I've been invited, check again</button>
+                </div>
+
+                <form method="post" action="{{ url_for('auth.logout') }}" class="text-center mt-3">
+                    <button type="submit" class="btn btn-link btn-sm text-muted">Sign in with a different account</button>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    {% if can_create %}
+    <script>
+        document.getElementById('welcomeCreateForm').addEventListener('submit', async (event) => {
+            event.preventDefault();
+            const button = document.getElementById('welcomeCreateBtn');
+            const errorEl = document.getElementById('welcomeError');
+            button.disabled = true;
+            errorEl.classList.add('d-none');
+            try {
+                const res = await fetch('/api/workspaces', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ name: document.getElementById('welcomeWorkspaceName').value.trim() })
+                });
+                const data = await res.json().catch(() => ({}));
+                if (!res.ok) throw new Error(data.error || 'Could not create the workspace.');
+                window.location.href = '/';
+            } catch (e) {
+                errorEl.textContent = e.message;
+                errorEl.classList.remove('d-none');
+                button.disabled = false;
+            }
+        });
+    </script>
+    {% endif %}
+</body>
+</html>
