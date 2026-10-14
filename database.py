@@ -502,14 +502,17 @@ def accept_invite_token(token, user):
         if get_membership_role(invite['workspace_id'], user['id']):
             return invite['workspace_id'], None
         return None, 'This invite link has already been used. Ask for a new one.'
+    if get_membership_role(invite['workspace_id'], user['id']):
+        # Already a member (e.g. the inviter testing their own link): open the workspace but leave the
+        # invite unused, because it is meant for someone else.
+        return invite['workspace_id'], None
     if invite['expired']:
         return None, 'This invite link has expired. Ask for a new one.'
 
-    if not get_membership_role(invite['workspace_id'], user['id']):
-        cursor.execute(
-            'INSERT INTO workspace_members (workspace_id, user_id, role, joined_at) VALUES (?, ?, ?, ?)',
-            (invite['workspace_id'], user['id'], invite['role'], datetime.now().isoformat())
-        )
+    cursor.execute(
+        'INSERT INTO workspace_members (workspace_id, user_id, role, joined_at) VALUES (?, ?, ?, ?)',
+        (invite['workspace_id'], user['id'], invite['role'], datetime.now().isoformat())
+    )
     _mark_invite_used(invite['id'], user['id'])
     conn.commit()
     return invite['workspace_id'], None

@@ -102,9 +102,12 @@
                 <div class="login-logo">
                     <i class="bi bi-envelope-paper-heart"></i>
                 </div>
-                {% if invite and already_member %}
+                {% if invite and already_member and invite.accepted %}
                 <h4 class="fw-bold mb-1 text-dark">You're already in {{ invite.workspace_name }}</h4>
                 <p class="text-muted small mb-0">This invite has been used to add you. You're all set.</p>
+                {% elif invite and already_member %}
+                <h4 class="fw-bold mb-1 text-dark">This invite is for someone else</h4>
+                <p class="text-muted small mb-0">You're signed in as <strong>{{ user.email }}</strong>, which is already in {{ invite.workspace_name }}. The link stays valid for the person it was sent to.</p>
                 {% elif invite and not invite.expired %}
                 <h4 class="fw-bold mb-1 text-dark">You're invited!</h4>
                 <p class="text-muted small mb-0"><strong>{{ invite.invited_by_name }}</strong> invited you to join <strong>{{ invite.workspace_name }}</strong> as {{ 'an admin' if invite.role == 'admin' else 'a member' }}.</p>
@@ -124,16 +127,21 @@
 
                 {% if invite and (already_member or not invite.expired) %}
                     {% if user and already_member %}
-                    <p class="small text-muted">You're already a member of {{ invite.workspace_name }}.</p>
-                    <form method="post" action="{{ url_for('workspaces.accept_invite', token=token) }}">
-                        <button type="submit" class="btn btn-primary w-100">Open {{ invite.workspace_name }}</button>
+                    <form method="post" action="{{ url_for('auth.logout', next=request.path) }}" class="mb-2">
+                        <button type="submit" class="btn btn-primary w-100"><i class="bi bi-person-gear me-1"></i> Join with a different account</button>
                     </form>
+                    <form method="post" action="{{ url_for('workspaces.accept_invite', token=token) }}">
+                        <button type="submit" class="btn btn-outline-secondary w-100">Go to {{ invite.workspace_name }}</button>
+                    </form>
+                    {% if not invite.accepted %}
+                    <p class="small text-muted text-center mt-2 mb-0">Testing your own link? Open it in a private/incognito window, or in another browser, and sign in there.</p>
+                    {% endif %}
                     {% elif user %}
                     <form method="post" action="{{ url_for('workspaces.accept_invite', token=token) }}">
                         <button type="submit" class="btn btn-primary w-100"><i class="bi bi-house-heart me-1"></i> Join {{ invite.workspace_name }}</button>
                     </form>
                     <p class="small text-muted text-center mt-2 mb-0">Joining as {{ user.email }}.</p>
-                    <form method="post" action="{{ url_for('auth.logout') }}" class="text-center">
+                    <form method="post" action="{{ url_for('auth.logout', next=request.path) }}" class="text-center">
                         <button type="submit" class="btn btn-link btn-sm text-muted">Use a different account</button>
                     </form>
                     {% else %}

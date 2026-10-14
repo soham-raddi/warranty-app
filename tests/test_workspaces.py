@@ -416,5 +416,21 @@ class WorkspaceTests(unittest.TestCase):
         self.assertEqual(sign_in('random@example.com').get(f'/join/{token}').status_code, 404)
 
 
+    def test_24_inviter_opening_their_own_link_does_not_use_it(self):
+        owner = sign_in(OWNER)
+        token = token_from(owner.post('/api/workspace/invites', json={'email': 'alt.account@example.com'}).json['link'])
+        page = owner.get(f'/join/{token}').get_data(as_text=True)
+        self.assertIn('for someone else', page)
+        self.assertEqual(owner.post(f'/join/{token}').status_code, 302)  # just opens the workspace
+
+        # "Join with a different account" signs out and comes back to the invite.
+        switched = owner.post(f'/auth/logout?next=/join/{token}')
+        self.assertIn(f'next=/join/{token}', switched.headers['Location'].replace('%2F', '/'))
+
+        alt = sign_in('alt.other@example.com')
+        self.assertEqual(alt.post(f'/join/{token}').status_code, 302)
+        self.assertEqual(alt.get('/api/auth/me').json['workspace']['name'], "Soham's Family")
+
+
 if __name__ == '__main__':
     unittest.main(verbosity=2)

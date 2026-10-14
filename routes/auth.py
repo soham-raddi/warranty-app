@@ -167,7 +167,9 @@ def dev_login():
 def logout():
     # POST only, so another site cannot sign you out with a plain link.
     session.clear()
-    return redirect(url_for('auth.login_page'))
+    # ?next= lets "Use a different account" on an invite page come back to that invite after signing in.
+    next_url = safe_next_url(request.args.get('next'))
+    return redirect(url_for('auth.login_page', next=next_url) if next_url else url_for('auth.login_page'))
 
 
 @auth_bp.route('/api/auth/me', methods=['GET'])
