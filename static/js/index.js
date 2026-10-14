@@ -1075,7 +1075,6 @@ async function loadSettingsIntoForm() {
     const timeFormatInput = byId('settingsTimeFormat');
     const motionInput = byId('settingsReducedMotion');
     const densityInput = byId('settingsDensity');
-    const status = byId('settingsStatus');
 
     if (timezoneInput) timezoneInput.value = appSettings.timezone || 'UTC';
     if (currencyInput) currencyInput.value = appSettings.currency_code || 'INR';
@@ -1096,10 +1095,8 @@ async function loadSettingsIntoForm() {
     if (timeFormatInput) timeFormatInput.value = appSettings.time_format || '12h';
     if (motionInput) motionInput.checked = isTruthySetting(appSettings.reduced_motion);
     if (densityInput) densityInput.value = appSettings.density || 'comfortable';
-    if (status) {
-        status.className = 'small mt-3 mb-0 text-muted';
-        status.innerText = `Theme: ${appSettings.theme_mode || 'system'} · Timezone: ${appSettings.timezone}`;
-    }
+    // The settings page tracks unsaved changes from this point.
+    document.dispatchEvent(new CustomEvent('settings:loaded'));
 }
 
 async function saveSettings(event) {
@@ -1124,7 +1121,6 @@ async function saveSettings(event) {
     const timeFormatInput = byId('settingsTimeFormat');
     const motionInput = byId('settingsReducedMotion');
     const densityInput = byId('settingsDensity');
-    const status = byId('settingsStatus');
 
     const payload = {
         timezone: timezoneInput ? timezoneInput.value.trim() : 'UTC',
@@ -1158,38 +1154,15 @@ async function saveSettings(event) {
         const data = await res.json();
 
         if (!res.ok) {
-            if (status) {
-                status.className = 'small mt-3 mb-0 text-danger';
-                status.innerText = data.error || 'Failed to save settings.';
-            }
+            showToast(data.error || 'Failed to save settings.', 'danger');
             return;
         }
 
-        appSettings.timezone = payload.timezone || appSettings.timezone;
-        appSettings.currency_code = payload.currency_code || appSettings.currency_code;
-        appSettings.currency_symbol = payload.currency_symbol || appSettings.currency_symbol;
-        appSettings.warranty_period_days = String(payload.warranty_period_days || appSettings.warranty_period_days);
-        appSettings.expiry_alert_days = String(payload.expiry_alert_days || appSettings.expiry_alert_days);
-        appSettings.reminders_enabled = payload.reminders_enabled || appSettings.reminders_enabled;
-        appSettings.reminder_days_before = String(payload.reminder_days_before || appSettings.reminder_days_before);
-        appSettings.reminder_recipients = payload.reminder_recipients || appSettings.reminder_recipients;
-        appSettings.reminder_subject = payload.reminder_subject || appSettings.reminder_subject;
-        appSettings.reminder_body = payload.reminder_body || appSettings.reminder_body;
-        appSettings.smtp_host = payload.smtp_host || appSettings.smtp_host;
-        appSettings.smtp_port = payload.smtp_port || appSettings.smtp_port;
-        appSettings.smtp_username = payload.smtp_username || appSettings.smtp_username;
-        appSettings.smtp_sender_email = payload.smtp_sender_email || appSettings.smtp_sender_email;
-        appSettings.theme_mode = payload.theme_mode || appSettings.theme_mode;
-        appSettings.accent_color = payload.accent_color || appSettings.accent_color;
-        appSettings.date_format = payload.date_format || appSettings.date_format;
-        appSettings.time_format = payload.time_format || appSettings.time_format;
-        appSettings.reduced_motion = payload.reduced_motion || appSettings.reduced_motion;
-        appSettings.density = payload.density || appSettings.density;
+        // Take the saved values as-is, so a field that was cleared stays cleared.
+        Object.assign(appSettings, data.settings || payload);
         applyUserPreferences();
-        if (status) {
-            status.className = 'small mt-3 mb-0 text-success';
-            status.innerText = 'Settings saved successfully.';
-        }
+        document.dispatchEvent(new CustomEvent('settings:saved'));
+        showToast('Settings saved.', 'success');
 
         await Promise.all([loadDashboard(), loadInventory()]);
         if (byId('chat-box')) {
@@ -1197,43 +1170,22 @@ async function saveSettings(event) {
             renderRecentConversationsSidebar(lastConversationList);
         }
     } catch (e) {
-        if (status) {
-            status.className = 'small mt-3 mb-0 text-danger';
-            status.innerText = 'Failed to save settings.';
-        }
+        showToast('Failed to save settings.', 'danger');
     }
 }
 
 async function sendReminderEmailsNow() {
-    const status = byId('settingsStatus');
-    if (status) {
-        status.className = 'small mt-3 mb-0 text-muted';
-        status.innerText = 'Sending reminder emails...';
-    }
-
+    showToast('Sending reminder emails...', 'info');
     try {
         const res = await fetch('/api/reminders/send', { method: 'POST' });
         const data = await res.json();
-
         if (!res.ok) {
-            if (status) {
-                status.className = 'small mt-3 mb-0 text-danger';
-                status.innerText = data.error || 'Failed to send reminder emails.';
-            }
+            showToast(data.error || 'Failed to send reminder emails.', 'danger');
             return;
         }
-
-        if (status) {
-            status.className = 'small mt-3 mb-0 text-success';
-            status.innerText = data.sent
-                ? `Reminder email sent to ${data.sent} recipient(s).`
-                : (data.message || 'Nothing to send.');
-        }
+        showToast(data.sent ? `Reminder email sent to ${data.sent} recipient(s).` : (data.message || 'Nothing to send.'), 'success');
     } catch (e) {
-        if (status) {
-            status.className = 'small mt-3 mb-0 text-danger';
-            status.innerText = 'Failed to send reminder emails.';
-        }
+        showToast('Failed to send reminder emails.', 'danger');
     }
 }
 

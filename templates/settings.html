@@ -3,332 +3,378 @@
 {% block title %}Settings | Digital Twin{% endblock %}
 
 {% block content %}
+{% set can_edit = current_role in ('owner', 'admin') %}
 <section class="page-hero mb-4">
     <h1 class="page-title">Settings</h1>
-    <p class="page-subtitle">Tune the app for readability, comfort, and the way you prefer to see dates and times.</p>
+    <p class="page-subtitle">Settings for <strong>{{ current_workspace.name }}</strong>. Changes apply to everyone in this workspace.</p>
 </section>
 
-<div class="settings-layout">
-    <section class="card section-card shadow-sm settings-main-card">
-        <div class="p-4 p-lg-5">
-            <form id="settingsForm" onsubmit="saveSettings(event)">
-                <div class="settings-group mb-4">
-                    <div class="settings-group-header">
-                        <div>
-                            <h2 class="settings-group-title">Date and time</h2>
-                            <p class="settings-group-note mb-0">Control how receipts, conversations, and warranty dates are shown.</p>
-                        </div>
-                        <span class="settings-group-badge">Core</span>
-                    </div>
+<div class="settings-shell">
+    <nav class="settings-nav" aria-label="Settings sections">
+        <div class="nav nav-pills settings-tabs" id="settingsTabs" role="tablist" aria-orientation="vertical">
+            <button class="settings-tab active" id="tab-general-btn" data-bs-toggle="pill" data-bs-target="#tab-general" data-tab="general" type="button" role="tab" aria-controls="tab-general" aria-selected="true">
+                <i class="bi bi-sliders"></i>
+                <span><strong>General</strong><small>Dates, currency, warranty</small></span>
+            </button>
+            <button class="settings-tab" id="tab-appearance-btn" data-bs-toggle="pill" data-bs-target="#tab-appearance" data-tab="appearance" type="button" role="tab" aria-controls="tab-appearance" aria-selected="false">
+                <i class="bi bi-palette"></i>
+                <span><strong>Appearance</strong><small>Theme, color, spacing</small></span>
+            </button>
+            <button class="settings-tab" id="tab-alerts-btn" data-bs-toggle="pill" data-bs-target="#tab-alerts" data-tab="alerts" type="button" role="tab" aria-controls="tab-alerts" aria-selected="false">
+                <i class="bi bi-bell"></i>
+                <span><strong>Alerts & reminders</strong><small>Expiry warnings, emails</small></span>
+            </button>
+            <button class="settings-tab" id="tab-email-btn" data-bs-toggle="pill" data-bs-target="#tab-email" data-tab="email" type="button" role="tab" aria-controls="tab-email" aria-selected="false">
+                <i class="bi bi-envelope-at"></i>
+                <span><strong>Email delivery</strong><small>SMTP server details</small></span>
+            </button>
+            <button class="settings-tab" id="tab-workspace-btn" data-bs-toggle="pill" data-bs-target="#tab-workspace" data-tab="workspace" type="button" role="tab" aria-controls="tab-workspace" aria-selected="false">
+                <i class="bi bi-people"></i>
+                <span><strong>Workspace & members</strong><small>Name, people, invites</small></span>
+            </button>
+        </div>
+    </nav>
 
-                    <div class="row g-3 mt-1">
-                        <div class="col-md-6">
-                            <label class="form-label fw-semibold" for="settingsTimezone">Timezone</label>
-                            <select id="settingsTimezone" class="form-select">
-                                <option value="UTC">UTC</option>
-                                <option value="Asia/Kolkata">Asia/Kolkata</option>
-                                <option value="Asia/Dubai">Asia/Dubai</option>
-                                <option value="Asia/Singapore">Asia/Singapore</option>
-                                <option value="Europe/London">Europe/London</option>
-                                <option value="Europe/Berlin">Europe/Berlin</option>
-                                <option value="America/New_York">America/New_York</option>
-                                <option value="America/Los_Angeles">America/Los_Angeles</option>
-                                <option value="Australia/Sydney">Australia/Sydney</option>
-                            </select>
-                            <div class="form-text">Used for chat timestamps and date labels.</div>
+    <div class="settings-content">
+        {% if not can_edit %}
+        <div class="alert alert-secondary small d-flex align-items-center gap-2 mb-3" role="note">
+            <i class="bi bi-lock"></i>
+            <span>You can view these settings. Only the owner or an admin of {{ current_workspace.name }} can change them.</span>
+        </div>
+        {% endif %}
+
+        <div class="tab-content">
+            <!-- General -->
+            <section class="tab-pane fade show active" id="tab-general" role="tabpanel" aria-labelledby="tab-general-btn" tabindex="0">
+                <div class="card section-card shadow-sm">
+                    <fieldset class="settings-pane" data-settings-pane {% if not can_edit %}disabled{% endif %}>
+                        <header class="settings-pane-header">
+                            <h2 class="settings-pane-title">General</h2>
+                            <p class="settings-group-note mb-0">How dates, times and amounts are shown, and how long warranties last by default.</p>
+                        </header>
+
+                        <div class="settings-group">
+                            <h3 class="settings-group-title mb-3">Date and time</h3>
+                            <div class="row g-3">
+                                <div class="col-md-6">
+                                    <label class="form-label fw-semibold" for="settingsTimezone">Timezone</label>
+                                    <select id="settingsTimezone" class="form-select">
+                                        <option value="UTC">UTC</option>
+                                        <option value="Asia/Kolkata">Asia/Kolkata</option>
+                                        <option value="Asia/Dubai">Asia/Dubai</option>
+                                        <option value="Asia/Singapore">Asia/Singapore</option>
+                                        <option value="Europe/London">Europe/London</option>
+                                        <option value="Europe/Berlin">Europe/Berlin</option>
+                                        <option value="America/New_York">America/New_York</option>
+                                        <option value="America/Los_Angeles">America/Los_Angeles</option>
+                                        <option value="Australia/Sydney">Australia/Sydney</option>
+                                    </select>
+                                    <div class="form-text">Used for chat timestamps and date labels.</div>
+                                </div>
+                                <div class="col-md-6">
+                                    <label class="form-label fw-semibold" for="settingsTimeFormat">Time format</label>
+                                    <select id="settingsTimeFormat" class="form-select">
+                                        <option value="12h">12-hour clock</option>
+                                        <option value="24h">24-hour clock</option>
+                                    </select>
+                                </div>
+                                <div class="col-md-6">
+                                    <label class="form-label fw-semibold" for="settingsDateFormat">Date format</label>
+                                    <select id="settingsDateFormat" class="form-select">
+                                        <option value="auto">Readable local date</option>
+                                        <option value="iso">ISO style (YYYY-MM-DD)</option>
+                                        <option value="dmy">Day / month / year</option>
+                                        <option value="mdy">Month / day / year</option>
+                                        <option value="long">Long date with weekday</option>
+                                    </select>
+                                </div>
+                                <div class="col-md-6">
+                                    <label class="form-label fw-semibold" for="settingsCurrency">Currency</label>
+                                    <select id="settingsCurrency" class="form-select">
+                                        <option value="INR">Indian Rupee (₹)</option>
+                                        <option value="USD">US Dollar ($)</option>
+                                        <option value="EUR">Euro (€)</option>
+                                        <option value="GBP">British Pound (£)</option>
+                                        <option value="AED">UAE Dirham (د.إ)</option>
+                                        <option value="CAD">Canadian Dollar (CA$)</option>
+                                        <option value="AUD">Australian Dollar (A$)</option>
+                                        <option value="SGD">Singapore Dollar (S$)</option>
+                                        <option value="JPY">Japanese Yen (¥)</option>
+                                        <option value="CNY">Chinese Yuan (CN¥)</option>
+                                    </select>
+                                    <div class="form-text">Only changes the symbol. Amounts are not converted.</div>
+                                </div>
+                            </div>
+
+                            <div class="settings-live-preview mt-3" aria-live="polite">
+                                <span class="settings-live-label">Preview</span>
+                                <span><i class="bi bi-calendar3"></i> <span id="previewDate"></span></span>
+                                <span><i class="bi bi-clock"></i> <span id="previewTime"></span></span>
+                                <span><i class="bi bi-cash-coin"></i> <span id="previewAmount"></span></span>
+                            </div>
                         </div>
-                        <div class="col-md-6">
-                            <label class="form-label fw-semibold" for="settingsTimeFormat">Time format</label>
-                            <select id="settingsTimeFormat" class="form-select">
-                                <option value="12h">12-hour clock</option>
-                                <option value="24h">24-hour clock</option>
-                            </select>
-                            <div class="form-text">Applies to chat and activity timestamps.</div>
+
+                        <div class="settings-group">
+                            <h3 class="settings-group-title mb-3">Warranty</h3>
+                            <div class="row g-3">
+                                <div class="col-md-6">
+                                    <label class="form-label fw-semibold" for="settingsWarrantyDays">Default warranty period (days)</label>
+                                    <input id="settingsWarrantyDays" type="number" min="1" max="3650" class="form-control" placeholder="365">
+                                    <div class="form-text">Used to work out when each item's warranty ends (purchase date + this many days).</div>
+                                </div>
+                            </div>
                         </div>
-                        <div class="col-md-6">
-                            <label class="form-label fw-semibold" for="settingsDateFormat">Date format</label>
-                            <select id="settingsDateFormat" class="form-select">
-                                <option value="auto">Readable local date</option>
-                                <option value="iso">ISO style (YYYY-MM-DD)</option>
-                                <option value="dmy">Day / month / year</option>
-                                <option value="mdy">Month / day / year</option>
-                                <option value="long">Long date with weekday</option>
-                            </select>
-                            <div class="form-text">Used in inventory, dashboard, and chat separators.</div>
-                        </div>
-                        <div class="col-md-6">
-                            <label class="form-label fw-semibold" for="settingsWarrantyDays">Default Warranty Period (days)</label>
-                            <input id="settingsWarrantyDays" type="number" min="1" max="3650" class="form-control" placeholder="365">
-                            <div class="form-text">Used to mark items as Active or Expired when exact duration is unavailable.</div>
-                        </div>
-                        <div class="col-12">
-                            <label class="form-label fw-semibold" for="settingsCurrency">Currency</label>
-                            <select id="settingsCurrency" class="form-select">
-                                <option value="INR" data-symbol="₹">Indian Rupee (₹)</option>
-                                <option value="USD" data-symbol="$">US Dollar ($)</option>
-                                <option value="EUR" data-symbol="€">Euro (€)</option>
-                                <option value="GBP" data-symbol="£">British Pound (£)</option>
-                                <option value="AED" data-symbol="د.إ">UAE Dirham (د.إ)</option>
-                                <option value="CAD" data-symbol="$">Canadian Dollar (C$)</option>
-                                <option value="AUD" data-symbol="$">Australian Dollar (A$)</option>
-                                <option value="SGD" data-symbol="$">Singapore Dollar (S$)</option>
-                                <option value="JPY" data-symbol="¥">Japanese Yen (¥)</option>
-                                <option value="CNY" data-symbol="¥">Chinese Yuan (¥)</option>
-                            </select>
-                            <div class="form-text">Symbol used when showing amounts. Receipt amounts are shown as recorded and are not converted.</div>
-                        </div>
-                    </div>
+                    </fieldset>
                 </div>
+            </section>
 
-                <div class="settings-group mb-4">
-                    <div class="settings-group-header">
-                        <div>
-                            <h2 class="settings-group-title">Look and feel</h2>
-                            <p class="settings-group-note mb-0">Change how the app looks and how much content it shows at once.</p>
-                        </div>
-                        <span class="settings-group-badge">Visual</span>
-                    </div>
+            <!-- Appearance -->
+            <section class="tab-pane fade" id="tab-appearance" role="tabpanel" aria-labelledby="tab-appearance-btn" tabindex="0">
+                <div class="card section-card shadow-sm">
+                    <fieldset class="settings-pane" data-settings-pane {% if not can_edit %}disabled{% endif %}>
+                        <header class="settings-pane-header">
+                            <h2 class="settings-pane-title">Appearance</h2>
+                            <p class="settings-group-note mb-0">How the app looks. Saved changes apply right away.</p>
+                        </header>
 
-                    <div class="row g-3 mt-1">
-                        <div class="col-md-6">
-                            <label class="form-label fw-semibold" for="settingsThemeMode">Theme</label>
-                            <select id="settingsThemeMode" class="form-select">
-                                <option value="system">Follow system preference</option>
-                                <option value="light">Light</option>
-                                <option value="dark">Dark</option>
-                            </select>
+                        <div class="settings-group">
+                            <div class="row g-3">
+                                <div class="col-md-6">
+                                    <label class="form-label fw-semibold" for="settingsThemeMode">Theme</label>
+                                    <select id="settingsThemeMode" class="form-select">
+                                        <option value="system">Follow system preference</option>
+                                        <option value="light">Light</option>
+                                        <option value="dark">Dark</option>
+                                    </select>
+                                </div>
+                                <div class="col-md-6">
+                                    <label class="form-label fw-semibold" for="settingsAccentColor">Accent color</label>
+                                    <select id="settingsAccentColor" class="form-select">
+                                        <option value="blue">Blue</option>
+                                        <option value="teal">Teal</option>
+                                        <option value="amber">Amber</option>
+                                        <option value="rose">Rose</option>
+                                        <option value="slate">Slate</option>
+                                    </select>
+                                </div>
+                                <div class="col-md-6">
+                                    <label class="form-label fw-semibold" for="settingsDensity">Layout density</label>
+                                    <select id="settingsDensity" class="form-select">
+                                        <option value="comfortable">Comfortable spacing</option>
+                                        <option value="compact">Compact spacing</option>
+                                    </select>
+                                    <div class="form-text">Compact shows more on screen with less padding.</div>
+                                </div>
+                            </div>
                         </div>
-                        <div class="col-md-6">
-                            <label class="form-label fw-semibold" for="settingsAccentColor">Accent color</label>
-                            <select id="settingsAccentColor" class="form-select">
-                                <option value="blue">Blue</option>
-                                <option value="teal">Teal</option>
-                                <option value="amber">Amber</option>
-                                <option value="rose">Rose</option>
-                                <option value="slate">Slate</option>
-                            </select>
-                        </div>
-                        <div class="col-md-6">
-                            <label class="form-label fw-semibold" for="settingsDensity">Layout density</label>
-                            <select id="settingsDensity" class="form-select">
-                                <option value="comfortable">Comfortable spacing</option>
-                                <option value="compact">Compact spacing</option>
-                            </select>
-                            <div class="form-text">Compact mode shows more content with less padding.</div>
-                        </div>
-                    </div>
-                </div>
 
-                <div class="settings-group mb-4">
-                    <div class="settings-group-header">
-                        <div>
-                            <h2 class="settings-group-title">Accessibility</h2>
-                            <p class="settings-group-note mb-0">Reduce visual noise when you want a calmer interface.</p>
-                        </div>
-                        <span class="settings-group-badge">Accessibility</span>
-                    </div>
-
-                    <div class="settings-toggle-grid mt-3">
-                        <label class="settings-toggle">
-                            <input id="settingsReducedMotion" type="checkbox">
-                            <span>
-                                <strong>Reduce motion</strong>
-                                <small>Minimizes animation and hover transitions across the app.</small>
-                            </span>
-                        </label>
-                    </div>
-                </div>
-
-                <div class="settings-group mb-4">
-                    <div class="settings-group-header">
-                        <div>
-                            <h2 class="settings-group-title">Alerts and reminders</h2>
-                            <p class="settings-group-note mb-0">Choose when items need attention and who gets warranty expiry emails.</p>
-                        </div>
-                        <span class="settings-group-badge">Alerts</span>
-                    </div>
-
-                    <div class="row g-3 mt-1">
-                        <div class="col-md-6">
-                            <label class="form-label fw-semibold" for="settingsExpiryAlertDays">Dashboard alert window (days)</label>
-                            <input id="settingsExpiryAlertDays" type="number" min="0" max="3650" class="form-control" placeholder="30">
-                            <div class="form-text">Items expiring within this many days, or expired within it, appear under Needs Attention.</div>
-                        </div>
-                        <div class="col-md-6">
-                            <label class="form-label fw-semibold" for="settingsReminderDaysBefore">Email reminder window (days)</label>
-                            <input id="settingsReminderDaysBefore" type="number" min="0" max="3650" class="form-control" placeholder="30">
-                            <div class="form-text">Reminder emails list active warranties ending within this many days.</div>
-                        </div>
-                        <div class="col-12">
+                        <div class="settings-group">
+                            <h3 class="settings-group-title mb-3">Accessibility</h3>
                             <label class="settings-toggle">
-                                <input id="settingsRemindersEnabled" type="checkbox">
+                                <input id="settingsReducedMotion" type="checkbox">
                                 <span>
-                                    <strong>Enable reminder emails</strong>
-                                    <small>Saves your preference. Emails are sent when you click "Send reminders now".</small>
+                                    <strong>Reduce motion</strong>
+                                    <small>Minimizes animation and hover transitions across the app.</small>
                                 </span>
                             </label>
                         </div>
-                        <div class="col-12">
-                            <label class="form-label fw-semibold" for="settingsReminderRecipients">Recipients</label>
-                            <input id="settingsReminderRecipients" type="text" class="form-control" placeholder="you@example.com, family@example.com">
-                            <div class="form-text">Separate multiple addresses with commas.</div>
+                    </fieldset>
+                </div>
+            </section>
+
+            <!-- Alerts & reminders -->
+            <section class="tab-pane fade" id="tab-alerts" role="tabpanel" aria-labelledby="tab-alerts-btn" tabindex="0">
+                <div class="card section-card shadow-sm">
+                    <fieldset class="settings-pane" data-settings-pane {% if not can_edit %}disabled{% endif %}>
+                        <header class="settings-pane-header">
+                            <h2 class="settings-pane-title">Alerts & reminders</h2>
+                            <p class="settings-group-note mb-0">When items show up under Needs Attention, and who gets warranty expiry emails.</p>
+                        </header>
+
+                        <div class="settings-group">
+                            <h3 class="settings-group-title mb-3">Dashboard alerts</h3>
+                            <div class="row g-3">
+                                <div class="col-md-6">
+                                    <label class="form-label fw-semibold" for="settingsExpiryAlertDays">Alert window (days)</label>
+                                    <input id="settingsExpiryAlertDays" type="number" min="0" max="3650" class="form-control" placeholder="30">
+                                    <div class="form-text">Items expiring within this many days, or expired within it, appear under Needs Attention.</div>
+                                </div>
+                            </div>
                         </div>
-                        <div class="col-12">
-                            <label class="form-label fw-semibold" for="settingsReminderSubject">Email subject</label>
-                            <input id="settingsReminderSubject" type="text" class="form-control" maxlength="200">
+
+                        <div class="settings-group">
+                            <h3 class="settings-group-title mb-3">Reminder emails</h3>
+                            <div class="row g-3">
+                                <div class="col-12">
+                                    <label class="settings-toggle">
+                                        <input id="settingsRemindersEnabled" type="checkbox">
+                                        <span>
+                                            <strong>Enable reminder emails</strong>
+                                            <small>Saves your preference. Emails are sent when you click "Send reminders now".</small>
+                                        </span>
+                                    </label>
+                                </div>
+                                <div class="col-md-6">
+                                    <label class="form-label fw-semibold" for="settingsReminderDaysBefore">Reminder window (days)</label>
+                                    <input id="settingsReminderDaysBefore" type="number" min="0" max="3650" class="form-control" placeholder="30">
+                                    <div class="form-text">Emails list active warranties ending within this many days.</div>
+                                </div>
+                                <div class="col-12">
+                                    <label class="form-label fw-semibold" for="settingsReminderRecipients">Recipients</label>
+                                    <input id="settingsReminderRecipients" type="text" class="form-control" placeholder="you@example.com, family@example.com">
+                                    <div class="form-text">Separate multiple addresses with commas.</div>
+                                </div>
+                                <div class="col-12">
+                                    <label class="form-label fw-semibold" for="settingsReminderSubject">Email subject</label>
+                                    <input id="settingsReminderSubject" type="text" class="form-control" maxlength="200">
+                                </div>
+                                <div class="col-12">
+                                    <label class="form-label fw-semibold" for="settingsReminderBody">Line per item</label>
+                                    <textarea id="settingsReminderBody" class="form-control" rows="2" maxlength="1000"></textarea>
+                                    <div class="form-text">Placeholders: <code>{{ '{{item_name}}' }}</code>, <code>{{ '{{brand}}' }}</code>, <code>{{ '{{expiry_date}}' }}</code>, <code>{{ '{{days_remaining}}' }}</code></div>
+                                </div>
+                            </div>
+                            {% if can_edit %}
+                            <div class="d-flex flex-wrap align-items-center gap-2 mt-3">
+                                <button type="button" class="btn btn-outline-primary" onclick="sendReminderEmailsNow()"><i class="bi bi-envelope"></i> Send reminders now</button>
+                                <span class="small text-muted">Uses the saved settings and the details in Email delivery.</span>
+                            </div>
+                            {% endif %}
                         </div>
-                        <div class="col-12">
-                            <label class="form-label fw-semibold" for="settingsReminderBody">Line per item</label>
-                            <textarea id="settingsReminderBody" class="form-control" rows="2" maxlength="1000"></textarea>
-                            <div class="form-text">Placeholders: <code>{{ '{{item_name}}' }}</code>, <code>{{ '{{brand}}' }}</code>, <code>{{ '{{expiry_date}}' }}</code>, <code>{{ '{{days_remaining}}' }}</code></div>
+                    </fieldset>
+                </div>
+            </section>
+
+            <!-- Email delivery -->
+            <section class="tab-pane fade" id="tab-email" role="tabpanel" aria-labelledby="tab-email-btn" tabindex="0">
+                <div class="card section-card shadow-sm">
+                    <fieldset class="settings-pane" data-settings-pane {% if not can_edit %}disabled{% endif %}>
+                        <header class="settings-pane-header">
+                            <h2 class="settings-pane-title">Email delivery</h2>
+                            <p class="settings-group-note mb-0">The mail server used to send reminder emails.</p>
+                        </header>
+
+                        <div class="settings-group">
+                            <div class="row g-3">
+                                <div class="col-md-8">
+                                    <label class="form-label fw-semibold" for="settingsSmtpHost">SMTP host</label>
+                                    <input id="settingsSmtpHost" type="text" class="form-control" placeholder="smtp.gmail.com">
+                                </div>
+                                <div class="col-md-4">
+                                    <label class="form-label fw-semibold" for="settingsSmtpPort">SMTP port</label>
+                                    <input id="settingsSmtpPort" type="number" min="1" max="65535" class="form-control" placeholder="587">
+                                </div>
+                                <div class="col-md-6">
+                                    <label class="form-label fw-semibold" for="settingsSmtpUsername">SMTP username</label>
+                                    <input id="settingsSmtpUsername" type="text" class="form-control" autocomplete="off">
+                                </div>
+                                <div class="col-md-6">
+                                    <label class="form-label fw-semibold" for="settingsSmtpSenderEmail">Sender email</label>
+                                    <input id="settingsSmtpSenderEmail" type="email" class="form-control" placeholder="Defaults to the username">
+                                </div>
+                            </div>
+                            <div class="settings-help-box mt-3 small">
+                                <i class="bi bi-shield-lock me-1"></i>
+                                The SMTP password is never stored here. It is read from <code>WARRANTY_SMTP_PASSWORD</code> in the server's <code>.env</code> file.
+                            </div>
                         </div>
-                        <div class="col-md-8">
-                            <label class="form-label fw-semibold" for="settingsSmtpHost">SMTP host</label>
-                            <input id="settingsSmtpHost" type="text" class="form-control" placeholder="smtp.gmail.com">
+                    </fieldset>
+                </div>
+            </section>
+
+            <!-- Workspace & members -->
+            <section class="tab-pane fade" id="tab-workspace" role="tabpanel" aria-labelledby="tab-workspace-btn" tabindex="0">
+                <div class="card section-card shadow-sm">
+                    <div class="settings-pane">
+                        <header class="settings-pane-header">
+                            <h2 class="settings-pane-title">Workspace & members</h2>
+                            <p class="settings-group-note mb-0">Everything in <strong>{{ current_workspace.name }}</strong> (items, receipts, settings) is shared only with the people listed here. Chats stay private to each person.</p>
+                        </header>
+                        {% if current_role == 'owner' %}
+                        <form class="row g-2 align-items-end mb-4" id="renameWorkspaceForm">
+                            <div class="col-sm-8">
+                                <label class="form-label fw-semibold" for="workspaceNameInput">Workspace name</label>
+                                <input id="workspaceNameInput" class="form-control" maxlength="60" value="{{ current_workspace.name }}" required>
+                            </div>
+                            <div class="col-sm-4">
+                                <button type="submit" class="btn btn-outline-primary w-100">Rename</button>
+                            </div>
+                        </form>
+                        {% endif %}
+
+                        <div class="table-responsive">
+                            <table class="table align-middle">
+                                <thead>
+                                    <tr>
+                                        <th>Member</th>
+                                        <th>Email</th>
+                                        <th>Role</th>
+                                        <th>Last sign-in</th>
+                                        <th class="text-end">Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="workspaceUsersTableBody"></tbody>
+                            </table>
                         </div>
-                        <div class="col-md-4">
-                            <label class="form-label fw-semibold" for="settingsSmtpPort">SMTP port</label>
-                            <input id="settingsSmtpPort" type="number" min="1" max="65535" class="form-control" placeholder="587">
+
+                        {% if current_role in ('owner', 'admin') %}
+                        <div class="border-top pt-4 mt-3">
+                            <h6 class="fw-bold mb-1"><i class="bi bi-person-plus-fill me-1 text-primary"></i> Invite a family member</h6>
+                            <p class="small text-muted mb-3">Enter their email to create a personal invite link, then send the link to them (WhatsApp, text, email). They can join with any Google account.</p>
+                            <form id="inviteMemberForm" class="row g-2 align-items-center">
+                                <div class="col-sm-6">
+                                    <input type="email" id="inviteEmail" class="form-control" placeholder="family.member@gmail.com" required>
+                                </div>
+                                <div class="col-sm-3">
+                                    <select id="inviteRole" class="form-select" aria-label="Role">
+                                        <option value="member">Member</option>
+                                        {% if current_role == 'owner' %}<option value="admin">Admin</option>{% endif %}
+                                    </select>
+                                </div>
+                                <div class="col-sm-3">
+                                    <button type="submit" class="btn btn-primary w-100"><i class="bi bi-send me-1"></i> Invite</button>
+                                </div>
+                            </form>
+                            <div id="inviteLinkBox" class="invite-link-box mt-3 d-none" role="status">
+                                <div class="small fw-semibold mb-2" id="inviteLinkTitle">Invite link</div>
+                                <div class="input-group">
+                                    <input id="inviteLinkInput" class="form-control" readonly aria-label="Invite link">
+                                    <button type="button" class="btn btn-primary" id="copyInviteLinkBtn"><i class="bi bi-clipboard me-1"></i> Copy</button>
+                                </div>
+                                <div class="small text-muted mt-2" id="inviteLinkNote"></div>
+                            </div>
+                            <p class="small text-muted mt-2 mb-0"><strong>Members</strong> can view, upload and chat. <strong>Admins</strong> can also delete items, change settings and invite members.</p>
+
+                            <div id="pendingInvitesBlock" class="mt-4 d-none">
+                                <h6 class="fw-bold mb-2">Pending invites</h6>
+                                <ul class="list-group" id="pendingInvitesList"></ul>
+                            </div>
                         </div>
-                        <div class="col-md-6">
-                            <label class="form-label fw-semibold" for="settingsSmtpUsername">SMTP username</label>
-                            <input id="settingsSmtpUsername" type="text" class="form-control" autocomplete="off">
+                        {% endif %}
+
+                        {% if current_role != 'owner' %}
+                        <div class="border-top pt-4 mt-3 d-flex flex-wrap align-items-center justify-content-between gap-2">
+                            <div class="small text-muted">You can leave this workspace at any time. You'll need a new invite to come back.</div>
+                            <button type="button" class="btn btn-outline-danger btn-sm" id="leaveWorkspaceBtn"><i class="bi bi-box-arrow-left me-1"></i> Leave workspace</button>
                         </div>
-                        <div class="col-md-6">
-                            <label class="form-label fw-semibold" for="settingsSmtpSenderEmail">Sender email</label>
-                            <input id="settingsSmtpSenderEmail" type="email" class="form-control" placeholder="Defaults to the username">
-                        </div>
-                        <div class="col-12">
-                            <div class="form-text">The SMTP password is never stored here. Set <code>WARRANTY_SMTP_PASSWORD</code> in your <code>.env</code> file.</div>
-                        </div>
+                        {% endif %}
                     </div>
                 </div>
-
-                <div class="d-flex flex-wrap gap-2 align-items-center">
-                    {% if current_role in ('owner', 'admin') %}
-                    <button type="submit" class="btn btn-primary">Save Settings</button>
-                    {% else %}
-                    <span class="small text-muted"><i class="bi bi-lock me-1"></i>Only the owner or an admin can change this workspace's settings.</span>
-                    {% endif %}
-                    <button type="button" class="btn btn-outline-secondary" onclick="loadSettingsIntoForm()">Reload</button>
-                    <button type="button" class="btn btn-outline-primary ms-auto{% if current_role not in ('owner', 'admin') %} d-none{% endif %}" onclick="sendReminderEmailsNow()"><i class="bi bi-envelope"></i> Send reminders now</button>
-                </div>
-
-                <p id="settingsStatus" class="small mt-3 mb-0"></p>
-            </form>
-        </div>
-    </section>
-
-    <aside class="card section-card shadow-sm settings-preview-card">
-        <div class="p-4 p-lg-5">
-            <h2 class="settings-preview-title mb-2">Preview</h2>
-            <p class="settings-preview-note">These settings change how the app frames the same data.</p>
-            <div class="settings-preview-grid">
-                <div>
-                    <span class="settings-preview-label">Date sample</span>
-                    <strong>Inventory purchase dates</strong>
-                    <p>Lists and separators follow your selected date format.</p>
-                </div>
-                <div>
-                    <span class="settings-preview-label">Time sample</span>
-                    <strong>Chat timestamps</strong>
-                    <p>Activity times respect your clock preference and timezone.</p>
-                </div>
-                <div>
-                    <span class="settings-preview-label">Theme sample</span>
-                    <strong>App chrome</strong>
-                    <p>The shell, cards, and controls adapt to light, dark, or system mode.</p>
-                </div>
-                <div>
-                    <span class="settings-preview-label">Accessibility sample</span>
-                    <strong>Reduced motion</strong>
-                    <p>Transition-heavy UI elements can be softened for comfort.</p>
-                </div>
-            </div>
-        </div>
-    </aside>
-</div>
-
-<section class="card section-card shadow-sm mt-4" id="workspace">
-    <div class="p-4 p-lg-5">
-        <div class="settings-group-header mb-3">
-            <div>
-                <h2 class="settings-group-title">Workspace & Members</h2>
-                <p class="settings-group-note mb-0">Everything in <strong>{{ current_workspace.name }}</strong> (items, receipts, settings) is shared only with the people listed here. Chats stay private to each person.</p>
-            </div>
-            <span class="settings-group-badge">Private</span>
+            </section>
         </div>
 
-        {% if current_role == 'owner' %}
-        <form class="row g-2 align-items-end mb-4" id="renameWorkspaceForm">
-            <div class="col-sm-8">
-                <label class="form-label fw-semibold" for="workspaceNameInput">Workspace name</label>
-                <input id="workspaceNameInput" class="form-control" maxlength="60" value="{{ current_workspace.name }}" required>
+        <form id="settingsForm" class="settings-savebar card section-card shadow-sm{% if not can_edit %} d-none{% endif %}" onsubmit="saveSettings(event)">
+            <div class="settings-savebar-status">
+                <span class="settings-dirty-dot" aria-hidden="true"></span>
+                <span id="settingsStatus" class="small" role="status">All changes saved</span>
             </div>
-            <div class="col-sm-4">
-                <button type="submit" class="btn btn-outline-primary w-100">Rename</button>
+            <div class="d-flex gap-2">
+                <button type="button" class="btn btn-outline-secondary" id="discardSettingsBtn" onclick="loadSettingsIntoForm()" disabled>Discard</button>
+                <button type="submit" class="btn btn-primary" id="saveSettingsBtn" disabled>Save changes</button>
             </div>
         </form>
-        {% endif %}
-
-        <div class="table-responsive">
-            <table class="table align-middle">
-                <thead>
-                    <tr>
-                        <th>Member</th>
-                        <th>Email</th>
-                        <th>Role</th>
-                        <th>Last sign-in</th>
-                        <th class="text-end">Actions</th>
-                    </tr>
-                </thead>
-                <tbody id="workspaceUsersTableBody"></tbody>
-            </table>
-        </div>
-
-        {% if current_role in ('owner', 'admin') %}
-        <div class="border-top pt-4 mt-3">
-            <h6 class="fw-bold mb-1"><i class="bi bi-person-plus-fill me-1 text-primary"></i> Invite a family member</h6>
-            <p class="small text-muted mb-3">Enter their email to create a personal invite link, then send the link to them (WhatsApp, text, email). They can join with any Google account.</p>
-            <form id="inviteMemberForm" class="row g-2 align-items-center">
-                <div class="col-sm-6">
-                    <input type="email" id="inviteEmail" class="form-control" placeholder="family.member@gmail.com" required>
-                </div>
-                <div class="col-sm-3">
-                    <select id="inviteRole" class="form-select" aria-label="Role">
-                        <option value="member">Member</option>
-                        {% if current_role == 'owner' %}<option value="admin">Admin</option>{% endif %}
-                    </select>
-                </div>
-                <div class="col-sm-3">
-                    <button type="submit" class="btn btn-primary w-100"><i class="bi bi-send me-1"></i> Invite</button>
-                </div>
-            </form>
-            <div id="inviteLinkBox" class="invite-link-box mt-3 d-none" role="status">
-                <div class="small fw-semibold mb-2" id="inviteLinkTitle">Invite link</div>
-                <div class="input-group">
-                    <input id="inviteLinkInput" class="form-control" readonly aria-label="Invite link">
-                    <button type="button" class="btn btn-primary" id="copyInviteLinkBtn"><i class="bi bi-clipboard me-1"></i> Copy</button>
-                </div>
-                <div class="small text-muted mt-2" id="inviteLinkNote"></div>
-            </div>
-            <p class="small text-muted mt-2 mb-0"><strong>Members</strong> can view, upload and chat. <strong>Admins</strong> can also delete items, change settings and invite members.</p>
-
-            <div id="pendingInvitesBlock" class="mt-4 d-none">
-                <h6 class="fw-bold mb-2">Pending invites</h6>
-                <ul class="list-group" id="pendingInvitesList"></ul>
-            </div>
-        </div>
-        {% endif %}
-
-        {% if current_role != 'owner' %}
-        <div class="border-top pt-4 mt-3 d-flex flex-wrap align-items-center justify-content-between gap-2">
-            <div class="small text-muted">You can leave this workspace at any time. You'll need a new invite to come back.</div>
-            <button type="button" class="btn btn-outline-danger btn-sm" id="leaveWorkspaceBtn"><i class="bi bi-box-arrow-left me-1"></i> Leave workspace</button>
-        </div>
-        {% endif %}
     </div>
-</section>
+</div>
 {% endblock %}
 
 {% block scripts %}
@@ -492,5 +538,103 @@ document.getElementById('leaveWorkspaceBtn')?.addEventListener('click', async ()
 });
 
 document.addEventListener('DOMContentLoaded', loadWorkspaceUsers);
+
+// ---- Tabs: remember the open tab in the URL (#appearance etc.) so reloads and links land on it ----
+const SETTINGS_TABS = ['general', 'appearance', 'alerts', 'email', 'workspace'];
+
+function showSettingsTab(name, updateUrl) {
+    const button = document.querySelector(`.settings-tab[data-tab="${name}"]`);
+    if (!button) return;
+    bootstrap.Tab.getOrCreateInstance(button).show();
+    if (updateUrl) history.replaceState(null, '', `#${name}`);
+}
+
+document.querySelectorAll('.settings-tab').forEach(button => {
+    button.addEventListener('shown.bs.tab', () => {
+        history.replaceState(null, '', `#${button.dataset.tab}`);
+        // On phones the tabs scroll sideways; keep the open one visible.
+        button.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+        // The save bar only applies to the settings tabs, not to Workspace & members.
+        document.getElementById('settingsForm')?.classList.toggle('is-hidden', button.dataset.tab === 'workspace');
+    });
+});
+
+function openTabFromHash() {
+    const name = window.location.hash.replace('#', '');
+    if (SETTINGS_TABS.includes(name)) showSettingsTab(name, false);
+}
+window.addEventListener('hashchange', openTabFromHash);
+openTabFromHash();
+
+// ---- Unsaved changes ----
+const settingsFields = () => [...document.querySelectorAll('[data-settings-pane] input, [data-settings-pane] select, [data-settings-pane] textarea')];
+const fieldValue = field => (field.type === 'checkbox' ? String(field.checked) : field.value);
+let savedSnapshot = null;
+
+function takeSettingsSnapshot() {
+    savedSnapshot = settingsFields().map(fieldValue).join('\u0000');
+    refreshDirtyState();
+}
+
+function settingsAreDirty() {
+    return savedSnapshot !== null && settingsFields().map(fieldValue).join('\u0000') !== savedSnapshot;
+}
+
+function refreshDirtyState() {
+    const dirty = settingsAreDirty();
+    document.getElementById('settingsForm')?.classList.toggle('is-dirty', dirty);
+    const status = document.getElementById('settingsStatus');
+    if (status) status.textContent = dirty ? 'You have unsaved changes' : 'All changes saved';
+    const save = document.getElementById('saveSettingsBtn');
+    const discard = document.getElementById('discardSettingsBtn');
+    if (save) save.disabled = !dirty;
+    if (discard) discard.disabled = !dirty;
+    updateSettingsPreview();
+}
+
+document.addEventListener('settings:loaded', takeSettingsSnapshot);
+document.addEventListener('settings:saved', takeSettingsSnapshot);
+document.addEventListener('input', event => { if (event.target.closest('[data-settings-pane]')) refreshDirtyState(); });
+document.addEventListener('change', event => { if (event.target.closest('[data-settings-pane]')) refreshDirtyState(); });
+
+// Pressing Enter in a settings field saves, like a normal form.
+document.addEventListener('keydown', event => {
+    if (event.key === 'Enter' && event.target.matches('[data-settings-pane] input') && settingsAreDirty()) {
+        event.preventDefault();
+        document.getElementById('settingsForm')?.requestSubmit();
+    }
+});
+
+window.addEventListener('beforeunload', event => {
+    if (settingsAreDirty()) {
+        event.preventDefault();
+        event.returnValue = '';
+    }
+});
+
+// ---- Live preview of the General tab's choices (before saving) ----
+function updateSettingsPreview() {
+    const dateEl = document.getElementById('previewDate');
+    if (!dateEl || typeof appSettings === 'undefined') return;
+
+    const chosen = {
+        timezone: document.getElementById('settingsTimezone')?.value,
+        date_format: document.getElementById('settingsDateFormat')?.value,
+        time_format: document.getElementById('settingsTimeFormat')?.value,
+        currency_code: document.getElementById('settingsCurrency')?.value,
+    };
+    // Format with the chosen values, then put the saved ones back.
+    const saved = {};
+    Object.keys(chosen).forEach(key => { saved[key] = appSettings[key]; if (chosen[key]) appSettings[key] = chosen[key]; });
+    try {
+        const now = new Date();
+        const today = now.toLocaleDateString('sv-SE', { timeZone: appSettings.timezone || 'UTC' });
+        dateEl.textContent = formatPlainDate(today);
+        document.getElementById('previewTime').textContent = formatTime(now.toISOString());
+        document.getElementById('previewAmount').textContent = money(121713.5);
+    } finally {
+        Object.assign(appSettings, saved);
+    }
+}
 </script>
 {% endblock %}
