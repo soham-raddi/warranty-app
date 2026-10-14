@@ -1,5 +1,7 @@
+import hashlib
 import os
 import re
+import secrets
 import sqlite3
 import threading
 from datetime import datetime, timedelta
@@ -63,6 +65,7 @@ DEFAULT_SETTINGS = {
 }
 
 WORKSPACE_ROLES = ('owner', 'admin', 'member')
+INVITE_LIFETIME_DAYS = 7
 
 
 def _add_column(table, column_sql):
@@ -183,6 +186,10 @@ _add_column('appliances_v5', 'warranty_card_path TEXT')
 _add_column('appliances_v5', 'workspace_id INTEGER')
 _add_column('chat_messages', 'workspace_id INTEGER')
 _add_column('chat_messages', 'user_id INTEGER')
+_add_column('workspace_invites', 'token_hash TEXT')
+_add_column('workspace_invites', 'expires_at TEXT')
+_add_column('workspace_invites', 'accepted_at TEXT')
+_add_column('workspace_invites', 'accepted_by INTEGER')
 
 cursor.execute("UPDATE chat_messages SET conversation_id = 'legacy' WHERE conversation_id IS NULL OR conversation_id = ''")
 cursor.execute('CREATE INDEX IF NOT EXISTS idx_service_history_item_id ON service_history(item_id)')
@@ -190,6 +197,7 @@ cursor.execute('CREATE INDEX IF NOT EXISTS idx_appliances_workspace ON appliance
 cursor.execute('CREATE INDEX IF NOT EXISTS idx_chat_owner ON chat_messages(workspace_id, user_id, conversation_id)')
 cursor.execute('CREATE INDEX IF NOT EXISTS idx_members_user ON workspace_members(user_id)')
 cursor.execute('CREATE INDEX IF NOT EXISTS idx_invites_email ON workspace_invites(email)')
+cursor.execute('CREATE UNIQUE INDEX IF NOT EXISTS idx_invites_token ON workspace_invites(token_hash) WHERE token_hash IS NOT NULL')
 conn.commit()
 
 # Earlier extractions stored placeholders such as "not found"; store them as empty instead.
@@ -380,48 +388,155 @@ def remove_workspace_member(workspace_id, user_id):
     return True, 'Member removed'
 
 
+def _hash_token(token):
+    """Invite tokens are stored only as SHA-256 hashes, so a copy of the database cannot be used to join."""
+    return hashlib.sha256(token.encode('utf-8')).hexdigest()
+
+
+def _new_token_and_expiry():
+    token = secrets.token_urlsafe(32)
+    expires_at = (datetime.now() + timedelta(days=INVITE_LIFETIME_DAYS)).isoformat(timespec='seconds')
+    return token, expires_at
+
+
+def _is_expired(expires_at):
+    # Invites created before links existed have no expiry date and stay valid until revoked.
+    return bool(expires_at) and datetime.fromisoformat(expires_at) < datetime.now()
+
+
 def create_invite(workspace_id, email, role, invited_by):
-    """Invites an email address into a workspace. Returns (invite, error)."""
+    """Invites an email address into a workspace. Returns (invite including its one-time token, error)."""
     clean_email = email.strip().lower()
     existing_user = get_user_by_email(clean_email)
     if existing_user and get_membership_role(workspace_id, existing_user['id']):
         return None, f'{clean_email} is already a member of this workspace'
-    try:
+
+    cursor.execute(
+        'SELECT id, expires_at, accepted_at FROM workspace_invites WHERE workspace_id = ? AND email = ?',
+        (workspace_id, clean_email)
+    )
+    existing = cursor.fetchone()
+    if existing and not existing[2] and not _is_expired(existing[1]):
+        return None, f'{clean_email} has already been invited. Use "New link" on their pending invite to share it again.'
+
+    token, expires_at = _new_token_and_expiry()
+    if existing:
+        # Re-inviting after the old link expired (or after a past invite was used) refreshes that invite.
         cursor.execute(
-            'INSERT INTO workspace_invites (workspace_id, email, role, invited_by, created_at) VALUES (?, ?, ?, ?, ?)',
-            (workspace_id, clean_email, role, invited_by, datetime.now().isoformat())
+            '''UPDATE workspace_invites SET role = ?, invited_by = ?, token_hash = ?, expires_at = ?, created_at = ?,
+                   accepted_at = NULL, accepted_by = NULL WHERE id = ?''',
+            (role, invited_by, _hash_token(token), expires_at, datetime.now().isoformat(), existing[0])
         )
-    except sqlite3.IntegrityError:
-        return None, f'{clean_email} has already been invited'
+        invite_id = existing[0]
+    else:
+        cursor.execute(
+            '''INSERT INTO workspace_invites (workspace_id, email, role, invited_by, created_at, token_hash, expires_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?)''',
+            (workspace_id, clean_email, role, invited_by, datetime.now().isoformat(), _hash_token(token), expires_at)
+        )
+        invite_id = cursor.lastrowid
     conn.commit()
-    return {'id': cursor.lastrowid, 'email': clean_email, 'role': role}, None
+    return {'id': invite_id, 'email': clean_email, 'role': role, 'token': token, 'expires_at': expires_at}, None
+
+
+def regenerate_invite_token(workspace_id, invite_id):
+    """Issues a fresh link for a pending invite (the old link stops working). Returns (token, expires_at) or None."""
+    token, expires_at = _new_token_and_expiry()
+    cursor.execute(
+        'UPDATE workspace_invites SET token_hash = ?, expires_at = ? WHERE id = ? AND workspace_id = ? AND accepted_at IS NULL',
+        (_hash_token(token), expires_at, invite_id, workspace_id)
+    )
+    conn.commit()
+    return (token, expires_at) if cursor.rowcount else None
 
 
 def list_invites(workspace_id):
     cursor.execute(
-        'SELECT id, email, role, created_at FROM workspace_invites WHERE workspace_id = ? ORDER BY created_at ASC',
+        '''SELECT id, email, role, created_at, expires_at FROM workspace_invites
+           WHERE workspace_id = ? AND accepted_at IS NULL ORDER BY created_at ASC''',
         (workspace_id,)
     )
-    return [{'id': row[0], 'email': row[1], 'role': row[2], 'created_at': row[3]} for row in cursor.fetchall()]
+    return [
+        {'id': row[0], 'email': row[1], 'role': row[2], 'created_at': row[3],
+         'expires_at': row[4], 'expired': _is_expired(row[4])}
+        for row in cursor.fetchall()
+    ]
 
 
 def delete_invite(workspace_id, invite_id):
-    cursor.execute('DELETE FROM workspace_invites WHERE id = ? AND workspace_id = ?', (invite_id, workspace_id))
+    cursor.execute('DELETE FROM workspace_invites WHERE id = ? AND workspace_id = ? AND accepted_at IS NULL',
+                   (invite_id, workspace_id))
     conn.commit()
     return cursor.rowcount > 0
 
 
+def get_invite_by_token(token):
+    """Looks up an invite link. Returns details for the join page, or None if the link is unknown."""
+    if not token or len(token) > 200:
+        return None
+    cursor.execute('''
+        SELECT i.id, i.workspace_id, i.email, i.role, i.expires_at, w.name, u.name, u.email, i.accepted_at
+        FROM workspace_invites i
+        JOIN workspaces w ON w.id = i.workspace_id
+        LEFT JOIN users u ON u.id = i.invited_by
+        WHERE i.token_hash = ?
+    ''', (_hash_token(token),))
+    row = cursor.fetchone()
+    if not row:
+        return None
+    return {
+        'id': row[0], 'workspace_id': row[1], 'email': row[2], 'role': row[3],
+        'expires_at': row[4], 'expired': _is_expired(row[4]),
+        'workspace_name': row[5], 'invited_by_name': row[6] or row[7] or 'Someone',
+        'accepted': bool(row[8]),
+    }
+
+
+def accept_invite_token(token, user):
+    """Joins the user to the invite's workspace and uses up the link. Returns (workspace_id, error)."""
+    invite = get_invite_by_token(token)
+    if not invite:
+        return None, 'This invite link is not valid. It may have been used already or revoked.'
+    if invite['accepted']:
+        # Opening your own used link again (e.g. after joining via email at sign-in) just takes you there.
+        if get_membership_role(invite['workspace_id'], user['id']):
+            return invite['workspace_id'], None
+        return None, 'This invite link has already been used. Ask for a new one.'
+    if invite['expired']:
+        return None, 'This invite link has expired. Ask for a new one.'
+
+    if not get_membership_role(invite['workspace_id'], user['id']):
+        cursor.execute(
+            'INSERT INTO workspace_members (workspace_id, user_id, role, joined_at) VALUES (?, ?, ?, ?)',
+            (invite['workspace_id'], user['id'], invite['role'], datetime.now().isoformat())
+        )
+    _mark_invite_used(invite['id'], user['id'])
+    conn.commit()
+    return invite['workspace_id'], None
+
+
+def _mark_invite_used(invite_id, user_id):
+    # Used invites are kept (not deleted) so their link can still recognise the person who used it.
+    cursor.execute(
+        'UPDATE workspace_invites SET accepted_at = ?, accepted_by = ? WHERE id = ?',
+        (datetime.now().isoformat(timespec='seconds'), user_id, invite_id)
+    )
+
+
 def accept_pending_invites(user):
-    """Turns any invites for the user's email into memberships. Returns the workspace ids joined."""
-    cursor.execute('SELECT id, workspace_id, role FROM workspace_invites WHERE email = ?', (user['email'].lower(),))
-    invites = cursor.fetchall()
+    """Turns unexpired invites for the user's email into memberships. Returns the workspace ids joined."""
+    cursor.execute(
+        'SELECT id, workspace_id, role, expires_at FROM workspace_invites WHERE email = ? AND accepted_at IS NULL',
+        (user['email'].lower(),)
+    )
+    invites = [row for row in cursor.fetchall() if not _is_expired(row[3])]
     joined = []
-    for invite_id, workspace_id, role in invites:
+    for invite_id, workspace_id, role, _expires_at in invites:
         cursor.execute(
             'INSERT OR IGNORE INTO workspace_members (workspace_id, user_id, role, joined_at) VALUES (?, ?, ?, ?)',
             (workspace_id, user['id'], role, datetime.now().isoformat())
         )
-        cursor.execute('DELETE FROM workspace_invites WHERE id = ?', (invite_id,))
+        _mark_invite_used(invite_id, user['id'])
         joined.append(workspace_id)
     if invites:
         conn.commit()

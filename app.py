@@ -108,6 +108,11 @@ def enforce_authentication():
     if user and not user.get('is_active'):
         user = None
 
+    if request.path.startswith('/join/'):
+        # Invite links are public so people can see who invited them before signing in.
+        g.current_user = user
+        return None
+
     if not user:
         # Drop sessions belonging to removed or deactivated users
         session.clear()

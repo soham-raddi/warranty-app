@@ -104,8 +104,9 @@ Open your web browser and navigate to http://127.0.0.1:5000/.
 Anyone with a Google account can sign in. Each family gets its own private **workspace** with its own items, receipts, settings and members:
 
 1. A new person signs in and is offered to **create a workspace** (they become its owner).
-2. The owner (or an admin) invites family members by Google email from **Settings → Workspace & Members**.
-3. Invited people join automatically the next time they sign in. Someone can belong to several workspaces and switch between them from the menu in the top-right corner.
+2. The owner (or an admin) invites a family member from **Settings → Workspace & Members** by entering their email. This creates a personal **invite link** to send them (WhatsApp, text, email; the app does not send emails itself).
+3. Opening the link shows who invited them; after signing in with **any** Google account they click **Join**. Links work once and expire after 7 days; "New link" replaces a lost link and "Revoke" cancels it. If they sign in with the exact email that was invited, they also join automatically.
+4. Someone can belong to several workspaces and switch between them from the menu in the top-right corner.
 
 Roles: **Owner** (everything, including renaming the workspace and adding admins), **Admin** (delete items, change settings, invite members), **Member** (view, upload receipts, chat). Chat history is private to each person, even inside a shared workspace.
 

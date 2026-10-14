@@ -70,6 +70,7 @@ os.chdir(TEST_DIR)  # uploads/ is created here, not in the project
 sys.path.insert(0, PROJECT_ROOT)
 
 import app as app_module  # noqa: E402  (must import after the environment is prepared)
+import database  # noqa: E402
 import chatbot  # noqa: E402
 import routes.receipts as receipts_routes  # noqa: E402
 
@@ -103,6 +104,10 @@ def sign_in(email):
     client = app_module.app.test_client()
     client.get(f'/auth/dev-login?email={email}')
     return client
+
+
+def token_from(link):
+    return link.rstrip('/').rsplit('/join/', 1)[1]
 
 
 def upload(client, name='receipt.jpg'):
@@ -294,6 +299,121 @@ class WorkspaceTests(unittest.TestCase):
         self.assertEqual(owner.get('/auth/logout').status_code, 405)
         self.assertEqual(owner.post('/auth/logout').status_code, 302)
         self.assertEqual(owner.get('/api/inventory').status_code, 401)
+
+
+    # --- invite links -----------------------------------------------------------------------------
+
+    def test_15_invite_link_works_with_any_google_account(self):
+        owner = sign_in(OWNER)
+        created = owner.post('/api/workspace/invites', json={'email': 'grandma@example.com'}).json
+        self.assertIn('/join/', created['link'])
+        self.assertNotIn('token', created['invite'], 'the raw token is only returned inside the link')
+        token = token_from(created['link'])
+
+        # Anyone with the link can see who invited them, without signing in.
+        page = app_module.app.test_client().get(f'/join/{token}')
+        self.assertEqual(page.status_code, 200)
+        self.assertIn("Soham&#39;s Family", page.get_data(as_text=True))
+
+        # She signs in with a different Google account than the one invited.
+        grandma = sign_in('grandma.personal@example.com')
+        self.assertEqual(grandma.get(f'/join/{token}').status_code, 200)
+        self.assertEqual(grandma.get('/api/inventory').status_code, 403, 'viewing the link must not join')
+
+        joined = grandma.post(f'/join/{token}')
+        self.assertEqual(joined.status_code, 302)
+        self.assertEqual(grandma.get('/api/auth/me').json['workspace']['name'], "Soham's Family")
+        self.assertEqual(grandma.get('/api/auth/me').json['role'], 'member')
+        pending = [i['email'] for i in owner.get('/api/workspace/members').json['invites']]
+        self.assertNotIn('grandma@example.com', pending, 'a used invite disappears')
+
+    def test_16_invite_link_works_only_once(self):
+        owner = sign_in(OWNER)
+        token = token_from(owner.post('/api/workspace/invites', json={'email': 'uncle@example.com'}).json['link'])
+        self.assertEqual(sign_in('uncle@example.com').post(f'/join/{token}').status_code, 302)
+        someone_else = sign_in('forwarded.to@example.com')
+        self.assertEqual(someone_else.post(f'/join/{token}').status_code, 400)
+        self.assertEqual(someone_else.get('/api/inventory').status_code, 403)
+
+    def test_17_expired_invite_cannot_be_used(self):
+        owner = sign_in(OWNER)
+        created = owner.post('/api/workspace/invites', json={'email': 'late@example.com'}).json
+        database.cursor.execute("UPDATE workspace_invites SET expires_at = '2020-01-01T00:00:00' WHERE id = ?",
+                                (created['invite']['id'],))
+        database.conn.commit()
+        token = token_from(created['link'])
+
+        self.assertIn('expired', app_module.app.test_client().get(f'/join/{token}').get_data(as_text=True))
+        late = sign_in('late@example.com')  # even the invited email no longer joins automatically
+        self.assertIn('/welcome', late.get('/').headers['Location'])
+        self.assertEqual(late.post(f'/join/{token}').status_code, 400)
+        expired = [i for i in owner.get('/api/workspace/members').json['invites'] if i['email'] == 'late@example.com']
+        self.assertTrue(expired[0]['expired'])
+
+        # Inviting the same email again refreshes the expired invite.
+        again = owner.post('/api/workspace/invites', json={'email': 'late@example.com'})
+        self.assertEqual(again.status_code, 201)
+        self.assertEqual(late.post(f"/join/{token_from(again.json['link'])}").status_code, 302)
+
+    def test_18_new_link_replaces_the_old_one(self):
+        owner = sign_in(OWNER)
+        created = owner.post('/api/workspace/invites', json={'email': 'aunt@example.com'}).json
+        old_token = token_from(created['link'])
+        fresh = owner.post(f"/api/workspace/invites/{created['invite']['id']}/link").json
+        new_token = token_from(fresh['link'])
+        self.assertNotEqual(old_token, new_token)
+
+        aunt = sign_in('aunt.other@example.com')
+        self.assertEqual(aunt.get(f'/join/{old_token}').status_code, 404)
+        self.assertEqual(aunt.post(f'/join/{old_token}').status_code, 400)
+        self.assertEqual(aunt.post(f'/join/{new_token}').status_code, 302)
+
+    def test_19_signing_in_from_a_link_returns_to_it(self):
+        owner = sign_in(OWNER)
+        token = token_from(owner.post('/api/workspace/invites', json={'email': 'nephew@example.com'}).json['link'])
+        visitor = app_module.app.test_client()
+        page = visitor.get(f'/join/{token}').get_data(as_text=True)
+        self.assertIn(f'next=/join/{token}', page.replace('%2F', '/'))
+
+        response = visitor.get(f'/auth/dev-login?email=nephew.alt@example.com&next=/join/{token}')
+        self.assertEqual(response.headers['Location'], f'/join/{token}')
+
+    def test_20_unknown_link_shows_not_valid(self):
+        page = sign_in(STRANGER).get('/join/not-a-real-token')
+        self.assertEqual(page.status_code, 404)
+        self.assertIn('not valid', page.get_data(as_text=True))
+
+    def test_21_raw_tokens_are_never_stored(self):
+        owner = sign_in(OWNER)
+        token = token_from(owner.post('/api/workspace/invites', json={'email': 'cousin2@example.com'}).json['link'])
+        database.cursor.execute('SELECT token_hash FROM workspace_invites')
+        stored = [row[0] for row in database.cursor.fetchall()]
+        self.assertNotIn(token, stored)
+        self.assertTrue(all(len(h) == 64 for h in stored if h))
+
+    def test_22_other_families_cannot_touch_your_invites(self):
+        owner, friend = sign_in(OWNER), sign_in(FRIEND)
+        invite = owner.post('/api/workspace/invites', json={'email': 'target@example.com'}).json['invite']
+        self.assertEqual(friend.post(f"/api/workspace/invites/{invite['id']}/link").status_code, 404)
+        self.assertEqual(friend.delete(f"/api/workspace/invites/{invite['id']}").status_code, 404)
+        self.assertIn('target@example.com', [i['email'] for i in owner.get('/api/workspace/members').json['invites']])
+
+
+    def test_23_invited_email_opening_its_link_sees_a_friendly_page(self):
+        owner = sign_in(OWNER)
+        token = token_from(owner.post('/api/workspace/invites', json={'email': 'brother@example.com'}).json['link'])
+        brother = app_module.app.test_client()
+        brother.get(f'/join/{token}')
+        # Signing in with the invited email joins automatically, then returns to the link.
+        landing = brother.get(f'/auth/dev-login?email=brother@example.com&next=/join/{token}')
+        self.assertEqual(landing.headers['Location'], f'/join/{token}')
+        page = brother.get(f'/join/{token}')
+        self.assertEqual(page.status_code, 200)
+        self.assertIn('already in', page.get_data(as_text=True))
+        self.assertEqual(brother.post(f'/join/{token}').status_code, 302)
+
+        # To anyone else the used link is simply not valid.
+        self.assertEqual(sign_in('random@example.com').get(f'/join/{token}').status_code, 404)
 
 
 if __name__ == '__main__':

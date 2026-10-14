@@ -1,20 +1,24 @@
 import os
 import re
+from datetime import datetime
 
 from flask import Blueprint, g, jsonify, redirect, render_template, request, session, url_for
 
 from database import (
+    accept_invite_token,
     create_invite,
     create_workspace,
     delete_invite,
+    get_invite_by_token,
     get_membership_role,
     get_user_workspaces,
     list_invites,
     list_workspace_members,
+    regenerate_invite_token,
     remove_workspace_member,
     rename_workspace,
 )
-from .auth import role_required
+from .auth import is_dev_login_allowed, is_google_configured, role_required
 
 workspaces_bp = Blueprint('workspaces', __name__)
 
@@ -32,6 +36,19 @@ def new_workspaces_allowed():
 def _clean_name(raw):
     name = re.sub(r'\s+', ' ', str(raw or '')).strip()
     return name[:MAX_NAME_LENGTH]
+
+
+@workspaces_bp.app_template_filter('nice_date')
+def nice_date(value):
+    """'2026-10-21T18:30:00' -> 'Oct 21, 2026', matching how dates appear elsewhere in the app."""
+    try:
+        return datetime.fromisoformat(str(value)).strftime('%b %d, %Y')
+    except (TypeError, ValueError):
+        return value or ''
+
+
+def _invite_link(token):
+    return url_for('workspaces.join_page', token=token, _external=True)
 
 
 def _default_workspace_name(user):
@@ -135,10 +152,24 @@ def invite_member():
     invite, error = create_invite(g.workspace_id, email, role, g.current_user['id'])
     if error:
         return jsonify({'error': error}), 400
+    token = invite.pop('token')
     return jsonify({
-        'message': f'Invited {email}. They join when they sign in with that Google account.',
+        'message': f'Invite created for {email}. Send them the link below.',
         'invite': invite,
+        'link': _invite_link(token),
     }), 201
+
+
+@workspaces_bp.route('/api/workspace/invites/<int:invite_id>/link', methods=['POST'])
+@role_required('owner', 'admin')
+def new_invite_link(invite_id):
+    # Only a hash of each link is stored, so a lost link is replaced rather than shown again.
+    result = regenerate_invite_token(g.workspace_id, invite_id)
+    if not result:
+        return jsonify({'error': 'Invite not found'}), 404
+    token, expires_at = result
+    return jsonify({'link': _invite_link(token), 'expires_at': expires_at,
+                    'message': 'New invite link created. The previous link no longer works.'})
 
 
 @workspaces_bp.route('/api/workspace/invites/<int:invite_id>', methods=['DELETE'])
@@ -176,3 +207,40 @@ def leave_workspace():
     remaining = get_user_workspaces(g.current_user['id'])
     session['workspace_id'] = remaining[0]['id'] if remaining else None
     return jsonify({'message': 'You left the workspace', 'redirect': url_for('pages.dashboard_page') if remaining else url_for('workspaces.welcome_page')})
+
+
+@workspaces_bp.route('/join/<token>', methods=['GET'])
+def join_page(token):
+    """Landing page for an invite link. Viewing it never joins anyone; that needs the Join button (POST)."""
+    invite = get_invite_by_token(token)
+    user = g.get('current_user')
+    already_member = bool(invite and user and get_membership_role(invite['workspace_id'], user['id']))
+    if invite and invite['accepted'] and not already_member:
+        invite = None  # a used link means nothing to anyone else
+
+    return render_template(
+        'join.html',
+        invite=invite,
+        user=user,
+        token=token,
+        already_member=already_member,
+        google_configured=is_google_configured(),
+        allow_dev_login=is_dev_login_allowed(),
+    ), (200 if invite else 404)
+
+
+@workspaces_bp.route('/join/<token>', methods=['POST'])
+def accept_invite(token):
+    user = g.get('current_user')
+    if not user:
+        return redirect(url_for('auth.login_page', next=url_for('workspaces.join_page', token=token)))
+
+    workspace_id, error = accept_invite_token(token, user)
+    if error:
+        invite = get_invite_by_token(token)
+        return render_template('join.html', invite=invite, user=user, token=token, error=error,
+                               already_member=False, google_configured=is_google_configured(),
+                               allow_dev_login=is_dev_login_allowed()), 400
+
+    session['workspace_id'] = workspace_id
+    return redirect(url_for('pages.dashboard_page'))

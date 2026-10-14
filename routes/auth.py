@@ -55,6 +55,9 @@ def start_session(user, next_url=None):
     accept_pending_invites(user)
     workspaces = get_user_workspaces(user['id'])
     if not workspaces:
+        # Someone who signed in from an invite link goes back to it to accept; others pick or create a workspace.
+        if next_url and next_url.startswith('/join/'):
+            return next_url
         return url_for('workspaces.welcome_page')
 
     session['workspace_id'] = workspaces[0]['id']

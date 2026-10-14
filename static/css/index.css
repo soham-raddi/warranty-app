@@ -1143,3 +1143,11 @@ body[data-theme="dark"] { --on-brand: #0b1220; }
 .badge.bg-primary {
     color: var(--on-brand) !important;
 }
+
+/* Invite link shown after creating an invite */
+.invite-link-box {
+    background: var(--brand-soft);
+    border: 1px solid var(--brand-border);
+    border-radius: var(--radius-control);
+    padding: 1rem;
+}
