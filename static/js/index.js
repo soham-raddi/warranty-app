@@ -4,7 +4,7 @@ function byId(id) {
 
 const appSettings = {
     timezone: 'UTC',
-    currency_symbol: 'Rs',
+    currency_symbol: '₹',
     currency_code: 'INR',
     warranty_period_days: '365',
     expiry_alert_days: '30',
@@ -33,17 +33,18 @@ const ACCENT_COLORS = {
     slate: ['#475569', '#334155']
 };
 
+// Display symbols only: amounts are stored in the currency printed on each receipt and are never converted.
 const CURRENCY_RATES = {
-    INR: { symbol: 'Rs', rate: 1 },
-    USD: { symbol: '$', rate: 0.012 },
-    EUR: { symbol: '€', rate: 0.011 },
-    GBP: { symbol: '£', rate: 0.0094 },
-    AED: { symbol: 'د.إ', rate: 0.044 },
-    CAD: { symbol: 'C$', rate: 0.016 },
-    AUD: { symbol: 'A$', rate: 0.018 },
-    SGD: { symbol: 'S$', rate: 0.016 },
-    JPY: { symbol: '¥', rate: 1.8 },
-    CNY: { symbol: '¥', rate: 0.087 }
+    INR: { symbol: '₹' },
+    USD: { symbol: '$' },
+    EUR: { symbol: '€' },
+    GBP: { symbol: '£' },
+    AED: { symbol: 'د.إ' },
+    CAD: { symbol: 'C$' },
+    AUD: { symbol: 'A$' },
+    SGD: { symbol: 'S$' },
+    JPY: { symbol: '¥' },
+    CNY: { symbol: '¥' }
 };
 
 function inferCurrencyCodeFromSymbol(symbol) {
@@ -58,6 +59,24 @@ function setText(id, value) {
     if (el) el.innerText = value;
 }
 
+// Shared empty, loading and error states so every list looks the same.
+function stateBlock(message, isError = false) {
+    return `<div class="state-message${isError ? ' is-error' : ''}">${escapeHtml(message)}</div>`;
+}
+
+function stateRow(colspan, message, isError = false) {
+    return `<tr><td colspan="${Number(colspan)}" class="p-0">${stateBlock(message, isError)}</td></tr>`;
+}
+
+function renderMessageContent(content, role) {
+    const text = String(content || '');
+    // Assistant replies are Markdown; render them only when the sanitizer is available.
+    if (role === 'assistant' && window.marked && window.DOMPurify) {
+        return DOMPurify.sanitize(marked.parse(text, { breaks: true, gfm: true }));
+    }
+    return escapeHtml(text).replace(/\n/g, '<br>');
+}
+
 function escapeHtml(text) {
     return String(text)
         .replace(/&/g, '&amp;')
@@ -67,15 +86,58 @@ function escapeHtml(text) {
         .replace(/'/g, '&#039;');
 }
 
+function parseAmount(value) {
+    // Same rule as the server: take the first number, so 'Rs. 1,200' is 1200 rather than 0.12.
+    const match = String(value ?? '').match(/-?\d[\d,]*(?:\.\d+)?/);
+    return match ? Number(match[0].replace(/,/g, '')) || 0 : 0;
+}
+
 function money(value) {
-    const amount = Number(String(value ?? 0).replace(/[^0-9.-]/g, '')) || 0;
-    const currency = CURRENCY_RATES[appSettings.currency_code] || CURRENCY_RATES.INR;
-    const converted = amount * currency.rate;
-    const formatted = new Intl.NumberFormat(undefined, {
-        maximumFractionDigits: 2,
-        minimumFractionDigits: 0
-    }).format(converted);
-    return `${currency.symbol} ${formatted}`;
+    // Intl picks the right symbol, placement and decimals for each currency (e.g. ₹1,21,713 or ¥5,000).
+    const code = CURRENCY_RATES[appSettings.currency_code] ? appSettings.currency_code : 'INR';
+    const locale = code === 'INR' ? 'en-IN' : undefined;
+    try {
+        return new Intl.NumberFormat(locale, {
+            style: 'currency',
+            currency: code,
+            minimumFractionDigits: 0,
+            maximumFractionDigits: 2
+        }).format(parseAmount(value));
+    } catch (e) {
+        return `${CURRENCY_RATES[code].symbol}${parseAmount(value).toLocaleString()}`;
+    }
+}
+
+function formatPlainDate(value) {
+    // Purchase and expiry dates are calendar dates (YYYY-MM-DD) with no time zone, so format them in UTC.
+    const raw = String(value || '').trim();
+    const match = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (!match) return raw;
+    const dt = new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3])));
+    const format = appSettings.date_format || 'auto';
+    const options = { timeZone: 'UTC' };
+    if (format === 'iso') return raw;
+    if (format === 'dmy') return dt.toLocaleDateString('en-GB', { ...options, day: '2-digit', month: '2-digit', year: 'numeric' });
+    if (format === 'mdy') return dt.toLocaleDateString('en-US', { ...options, month: '2-digit', day: '2-digit', year: 'numeric' });
+    if (format === 'long') return dt.toLocaleDateString([], { ...options, weekday: 'short', month: 'short', day: '2-digit', year: 'numeric' });
+    return dt.toLocaleDateString([], { ...options, month: 'short', day: '2-digit', year: 'numeric' });
+}
+
+function warrantyBadge(status) {
+    const label = status || 'Unknown';
+    const classes = {
+        'Active': 'bg-success',
+        'Expiring Soon': 'bg-warning text-dark',
+        'Expired': 'bg-danger',
+    };
+    return `<span class="badge ${classes[label] || 'bg-secondary'}">${escapeHtml(label)}</span>`;
+}
+
+function describeDaysRemaining(days) {
+    if (typeof days !== 'number') return '';
+    if (days < 0) return `${Math.abs(days)} day${days === -1 ? '' : 's'} ago`;
+    if (days === 0) return 'today';
+    return `${days} day${days === 1 ? '' : 's'} left`;
 }
 
 function isTruthySetting(value) {
@@ -91,19 +153,43 @@ function resolveThemeMode() {
     return 'light';
 }
 
+function showToast(message, tone = 'info') {
+    // Consistent, non-blocking feedback in place of browser alert() popups.
+    let container = byId('toastContainer');
+    if (!container) {
+        container = document.createElement('div');
+        container.id = 'toastContainer';
+        container.className = 'toast-container position-fixed bottom-0 end-0 p-3';
+        document.body.appendChild(container);
+    }
+    const icons = { success: 'bi-check-circle-fill', danger: 'bi-exclamation-octagon-fill', warning: 'bi-exclamation-triangle-fill', info: 'bi-info-circle-fill' };
+    const toastEl = document.createElement('div');
+    toastEl.className = `toast app-toast app-toast-${tone} border-0`;
+    toastEl.setAttribute('role', tone === 'danger' ? 'alert' : 'status');
+    toastEl.setAttribute('aria-live', tone === 'danger' ? 'assertive' : 'polite');
+    toastEl.innerHTML = `
+        <div class="d-flex align-items-start gap-2 p-3">
+            <i class="bi ${icons[tone] || icons.info} app-toast-icon"></i>
+            <div class="flex-grow-1">${escapeHtml(message)}</div>
+            <button type="button" class="btn-close btn-close-sm" data-bs-dismiss="toast" aria-label="Close"></button>
+        </div>`;
+    container.appendChild(toastEl);
+    toastEl.addEventListener('hidden.bs.toast', () => toastEl.remove());
+    bootstrap.Toast.getOrCreateInstance(toastEl, { delay: tone === 'danger' ? 7000 : 4000 }).show();
+}
+
 function applyUserPreferences() {
     const body = document.body;
     if (!body) return;
 
     const resolvedTheme = resolveThemeMode();
-    const accent = ACCENT_COLORS[appSettings.accent_color] || ACCENT_COLORS.blue;
 
     body.dataset.theme = resolvedTheme;
     body.dataset.density = appSettings.density || 'comfortable';
     body.dataset.reducedMotion = isTruthySetting(appSettings.reduced_motion) ? '1' : '0';
 
-    document.documentElement.style.setProperty('--brand', accent[0]);
-    document.documentElement.style.setProperty('--brand-2', accent[1]);
+    // Accent colours live in CSS (body[data-accent]); the server renders the same attribute on page load.
+    body.dataset.accent = ACCENT_COLORS[appSettings.accent_color] ? appSettings.accent_color : 'blue';
     document.documentElement.style.colorScheme = resolvedTheme === 'dark' ? 'dark' : 'light';
 }
 
@@ -206,7 +292,7 @@ function truncateText(text, maxLength) {
     const value = String(text || '').trim();
     if (!value) return '';
     if (value.length <= maxLength) return value;
-    return `${value.slice(0, maxLength - 1).trim()}...`;
+    return `${value.slice(0, maxLength - 1).trim()}…`;
 }
 
 let activeServiceHistoryItemId = null;
@@ -214,7 +300,7 @@ let activeServiceHistoryItemId = null;
 function renderServiceTimeline(entries) {
     const history = Array.isArray(entries) ? entries : [];
     if (!history.length) {
-        return '<p class="text-muted mb-0">No service history yet for this product.</p>';
+        return stateBlock('No service history yet for this product.');
     }
 
     return `<div class="service-timeline">${history.map(entry => `
@@ -223,14 +309,14 @@ function renderServiceTimeline(entries) {
             <div class="service-timeline-card">
                 <div class="d-flex justify-content-between flex-wrap gap-2">
                     <strong>${escapeHtml(entry.service_type || 'Service')}</strong>
-                    <span class="text-muted small">${escapeHtml(formatDateTimeValue(entry.service_date) || entry.service_date || '')}</span>
+                    <span class="text-muted small">${escapeHtml(formatPlainDate(entry.service_date) || '')}</span>
                 </div>
                 <div class="small text-muted mt-1">
                     ${entry.vendor ? `Vendor: ${escapeHtml(entry.vendor)}` : ''}
                     ${entry.cost ? `${entry.vendor ? ' · ' : ''}Cost: ${escapeHtml(entry.cost)}` : ''}
                 </div>
                 ${entry.notes ? `<p class="mb-0 mt-2">${escapeHtml(entry.notes)}</p>` : ''}
-                ${entry.next_service_date ? `<div class="small mt-2">Next service: ${escapeHtml(entry.next_service_date)}</div>` : ''}
+                ${entry.next_service_date ? `<div class="small mt-2">Next service: ${escapeHtml(formatPlainDate(entry.next_service_date))}</div>` : ''}
             </div>
         </div>
     `).join('')}</div>`;
@@ -242,10 +328,12 @@ async function openServiceHistory(itemId, itemName) {
 
     activeServiceHistoryItemId = Number(itemId);
     setText('serviceHistoryTitle', itemName || 'Item');
+    const statusEl = byId('serviceHistoryStatus');
+    if (statusEl) statusEl.className = 'small mt-3 mb-0 text-muted';
     setText('serviceHistoryStatus', 'Loading timeline...');
     const listEl = byId('serviceHistoryList');
     if (listEl) {
-        listEl.innerHTML = '<p class="text-muted mb-0">Loading service history...</p>';
+        listEl.innerHTML = stateBlock('Loading service history...');
     }
 
     try {
@@ -257,15 +345,14 @@ async function openServiceHistory(itemId, itemName) {
         setText('serviceHistoryStatus', data.entries && data.entries.length ? `${data.entries.length} record(s) found.` : 'No service records yet.');
     } catch (e) {
         if (listEl) {
-            listEl.innerHTML = '<p class="text-danger mb-0">Could not load service history.</p>';
+            listEl.innerHTML = stateBlock('Could not load service history.', true);
         }
         setText('serviceHistoryStatus', 'Could not load timeline.');
     }
 
     const form = byId('serviceHistoryForm');
     if (form) form.reset();
-    const modal = new bootstrap.Modal(modalEl);
-    modal.show();
+    bootstrap.Modal.getOrCreateInstance(modalEl).show();
 }
 
 async function saveServiceHistory(event) {
@@ -332,12 +419,13 @@ async function uploadReceipt() {
     if (!fileInput) return;
 
     const file = fileInput.files[0];
-    if (!file) return alert('Select a file!');
+    if (!file) return showToast('Choose a receipt image or PDF first.', 'warning');
 
     const btn = byId('upBtn');
     const loader = byId('upLoader');
     if (btn) btn.disabled = true;
     if (loader) loader.classList.remove('d-none');
+    setText('upBtnLabel', 'Scanning...');
 
     const formData = new FormData();
     formData.append('receipt_image', file);
@@ -350,34 +438,70 @@ async function uploadReceipt() {
             setText('modalItemName', data.item_name || 'N/A');
             setText('modalCategory', data.category || 'N/A');
             setText('modalStore', data.store_name || 'N/A');
-            setText('modalDate', data.date_of_purchase || 'N/A');
+            setText('modalDate', formatPlainDate(data.date_of_purchase) || 'Not found');
             setText('modalInvoice', data.invoice_number || 'N/A');
             setText('modalWarranty', data.warranty_info || 'Not specified on receipt');
-            setText('modalPrice', data.total_amount || '0');
+            setText('modalPrice', data.total_amount ? money(data.total_amount) : 'Not found');
 
             const modalEl = byId('summaryModal');
             if (modalEl) {
-                const summaryModal = new bootstrap.Modal(modalEl);
-                summaryModal.show();
+                bootstrap.Modal.getOrCreateInstance(modalEl).show();
             }
 
             fileInput.value = '';
+            showSelectedReceipt(null);
         } else {
-            alert(`Error: ${data.error || 'Upload failed'}`);
+            showToast(data.error || 'Upload failed.', 'danger');
         }
     } catch (e) {
-        alert('Upload failed. Make sure the server is running.');
+        showToast('Upload failed. Make sure the server is running.', 'danger');
     } finally {
         if (btn) btn.disabled = false;
         if (loader) loader.classList.add('d-none');
+        setText('upBtnLabel', 'Scan and Save');
     }
+}
+
+function showSelectedReceipt(file) {
+    const label = byId('dropZoneFile');
+    if (!label) return;
+    label.textContent = file ? file.name : '';
+    label.classList.toggle('d-none', !file);
+}
+
+function initDropZone() {
+    const zone = byId('dropZone');
+    const input = byId('receiptFile');
+    if (!zone || !input) return;
+
+    input.addEventListener('change', () => showSelectedReceipt(input.files[0] || null));
+    zone.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault();
+            input.click();
+        }
+    });
+    ['dragenter', 'dragover'].forEach(type => zone.addEventListener(type, (event) => {
+        event.preventDefault();
+        zone.classList.add('is-dragover');
+    }));
+    ['dragleave', 'drop'].forEach(type => zone.addEventListener(type, () => zone.classList.remove('is-dragover')));
+    zone.addEventListener('drop', (event) => {
+        event.preventDefault();
+        const file = event.dataTransfer.files[0];
+        if (!file) return;
+        const transfer = new DataTransfer();
+        transfer.items.add(file);
+        input.files = transfer.files;
+        showSelectedReceipt(file);
+    });
 }
 
 async function loadInventory() {
     const tbody = byId('invTable');
     if (!tbody) return;
 
-    tbody.innerHTML = '<tr><td colspan="6" class="text-center p-5">Loading digital twin data...</td></tr>';
+    tbody.innerHTML = stateRow(6, 'Loading inventory...');
 
     try {
         const res = await fetch('/api/inventory');
@@ -387,38 +511,45 @@ async function loadInventory() {
         setText('s-act', data.active_warranties || 0);
 
         if (!data.items || data.items.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="6" class="text-center p-5 text-muted">No items found.</td></tr>';
+            tbody.innerHTML = stateRow(6, 'No items yet. Upload a receipt to add your first item.');
             return;
         }
 
-        tbody.innerHTML = data.items.map(i => `
+        tbody.innerHTML = data.items.map(i => {
+            const itemId = Number(i.id);
+            const expiry = i.warranty_expires_on
+                ? `<small class="text-muted d-block">Warranty until ${escapeHtml(formatPlainDate(i.warranty_expires_on))}</small>`
+                : '';
+            return `
             <tr>
                 <td class="ps-4">
-                    <a href="/${i.file_path}" target="_blank" class="item-link" title="Click to view receipt">
+                    <a href="/files/receipt/${itemId}" target="_blank" class="item-link" title="Click to view receipt">
                         <strong>${escapeHtml(i.item_name || 'Unknown')}</strong><br>
                         <small class="text-muted">${escapeHtml(i.brand || 'N/A')}</small>
                     </a>
                 </td>
                 <td><span class="badge bg-light text-dark border">${escapeHtml(i.category || 'N/A')}</span></td>
-                <td>${escapeHtml(i.date_of_purchase || 'N/A')}<br><small class="text-muted">${escapeHtml(i.warranty_expires_on || '')}</small></td>
-                <td class="fw-bold">${money(i.total_amount || 0)}</td>
+                <td class="text-nowrap">${escapeHtml(formatPlainDate(i.date_of_purchase) || 'Unknown')}${expiry}</td>
+                <td class="fw-bold text-nowrap">${money(i.total_amount || 0)}</td>
                 <td>
-                    <span class="badge ${i.warranty_status === 'Active' ? 'bg-success' : i.warranty_status === 'Expiring Soon' ? 'bg-warning text-dark' : 'bg-danger'} me-1">${escapeHtml(i.warranty_status || 'Unknown')}</span>
-                    ${i.has_warranty_card
-                        ? `<a href="/${i.warranty_card_path}" target="_blank" class="badge text-bg-info text-decoration-none" title="View attached warranty card">Card Attached</a>`
-                        : `<button onclick="attachWarrantyCard(${Number(i.id)})" class="btn btn-sm btn-outline-warning py-0 px-2" title="Attach warranty card">Attach Card</button>`}
+                    <div class="d-flex flex-wrap gap-1 align-items-center">
+                        ${warrantyBadge(i.warranty_status)}
+                        ${Number(i.has_warranty_card || 0)
+                            ? `<a href="/files/warranty-card/${itemId}" target="_blank" class="badge text-bg-info text-decoration-none" title="View attached warranty card">Card Attached</a>`
+                            : `<button type="button" data-action="attach-card" data-item-id="${itemId}" class="btn btn-sm btn-outline-warning py-0 px-2" title="Attach warranty card">Attach Card</button>`}
+                    </div>
                 </td>
                 <td class="text-end pe-4">
                     <div class="btn-group">
-                        <button type="button" class="btn btn-sm btn-outline-info" onclick="openServiceHistory(${Number(i.id)}, ${JSON.stringify(String(i.item_name || 'Item'))})" title="View service history"><i class="bi bi-clock-history"></i></button>
-                        <a href="/${i.file_path}" download class="btn btn-sm btn-outline-secondary" title="Download Image"><i class="bi bi-download"></i></a>
-                        <button onclick="delItem(${Number(i.id)})" class="btn btn-sm btn-outline-danger" title="Delete Record"><i class="bi bi-trash"></i></button>
+                        <button type="button" class="btn btn-sm btn-outline-info" data-action="service-history" data-item-id="${itemId}" data-item-name="${escapeHtml(i.item_name || 'Item')}" title="View service history"><i class="bi bi-clock-history"></i></button>
+                        <a href="/files/receipt/${itemId}" download class="btn btn-sm btn-outline-secondary" title="Download receipt"><i class="bi bi-download"></i></a>
+                        <button type="button" data-action="delete-item" data-item-id="${itemId}" class="btn btn-sm btn-outline-danger" title="Delete Record"><i class="bi bi-trash"></i></button>
                     </div>
                 </td>
-            </tr>
-        `).join('');
+            </tr>`;
+        }).join('');
     } catch (e) {
-        tbody.innerHTML = '<tr><td colspan="6" class="text-center text-danger p-5">Failed to connect to database.</td></tr>';
+        tbody.innerHTML = stateRow(6, 'Could not load inventory.', true);
     }
 }
 
@@ -435,19 +566,21 @@ async function loadDashboard() {
         setText('dash-active', data.active_warranties || 0);
         setText('dash-count', items.length);
 
-        items.sort((a, b) => String(b.date_of_purchase || '').localeCompare(String(a.date_of_purchase || '')));
+        // Newest purchases first; items without a valid purchase date go last.
+        const sortKey = i => /^\d{4}-\d{2}-\d{2}$/.test(String(i.date_of_purchase || '')) ? i.date_of_purchase : '';
+        items.sort((a, b) => sortKey(b).localeCompare(sortKey(a)));
 
         const recentBody = byId('dash-recent-body');
         if (recentBody) {
             if (!items.length) {
-                recentBody.innerHTML = '<tr><td colspan="4" class="text-center p-4 text-muted">No items available.</td></tr>';
+                recentBody.innerHTML = stateRow(4, 'No items yet. Upload a receipt to add your first item.');
             } else {
                 recentBody.innerHTML = items.slice(0, 6).map(i => `
                     <tr>
                         <td class="ps-4"><strong>${escapeHtml(i.item_name || 'Unknown')}</strong><br><small class="text-muted">${escapeHtml(i.brand || 'N/A')}</small></td>
-                        <td>${escapeHtml(i.date_of_purchase || 'N/A')}</td>
-                        <td>${money(i.total_amount || 0)}</td>
-                        <td class="pe-4">${i.warranty_status === 'Active' ? '<span class="badge bg-success">Active</span>' : '<span class="badge bg-danger">Expired</span>'}</td>
+                        <td class="text-nowrap">${escapeHtml(formatPlainDate(i.date_of_purchase) || 'Unknown')}</td>
+                        <td class="text-nowrap">${money(i.total_amount || 0)}</td>
+                        <td class="pe-4">${warrantyBadge(i.warranty_status)}</td>
                     </tr>
                 `).join('');
             }
@@ -455,45 +588,41 @@ async function loadDashboard() {
 
         const alerts = byId('dash-alerts');
         if (alerts) {
-            const alertItems = Array.isArray(data.alerts) ? data.alerts.slice(0, 6) : [];
-            if (alertItems.length) {
-                alerts.innerHTML = `<div class="dashboard-attention-list">${alertItems.map(alert => `
-                    <div class="attention-item ${alert.status === 'expired' ? 'border-danger' : 'border-warning'}">
+            const blocks = [];
+            const alertItems = Array.isArray(data.alerts) ? data.alerts : [];
+            alertItems.forEach(alert => {
+                const expired = alert.status === 'expired';
+                const when = alert.expiry_date ? ` on ${escapeHtml(formatPlainDate(alert.expiry_date))}` : '';
+                const relative = describeDaysRemaining(alert.days_remaining);
+                blocks.push(`
+                    <div class="attention-item ${expired ? 'border-danger' : 'border-warning'}">
                         <h6>${escapeHtml(alert.item_name || 'Item')}</h6>
-                        <p>
-                            ${alert.status === 'expired' ? 'Expired' : 'Expiring soon'}
-                            ${alert.expiry_date ? `on ${escapeHtml(alert.expiry_date)}` : ''}
-                            ${typeof alert.days_remaining === 'number' ? `(${alert.days_remaining} days left)` : ''}.
-                        </p>
+                        <p>${expired ? 'Warranty expired' : 'Warranty expires'}${when}${relative ? ` (${relative})` : ''}.</p>
                     </div>
-                `).join('')}</div>`;
-            } else {
-                const missingCards = items.filter(i => !Number(i.has_warranty_card || 0)).slice(0, 4);
-                const unknownWarranty = items.filter(i => (i.warranty_status || 'Unknown') === 'Unknown').slice(0, 4);
-                const blocks = [];
+                `);
+            });
 
-                if (missingCards.length) {
-                    blocks.push(...missingCards.map(i => `
-                        <div class="attention-item">
-                            <h6>${escapeHtml(i.item_name || 'Item')}</h6>
-                            <p>Warranty card missing. Add it from Inventory for faster claim support.</p>
-                        </div>
-                    `));
-                }
+            items.filter(i => (i.warranty_status || 'Unknown') === 'Unknown').forEach(i => {
+                blocks.push(`
+                    <div class="attention-item">
+                        <h6>${escapeHtml(i.item_name || 'Item')}</h6>
+                        <p>Warranty status unknown because the purchase date is missing.</p>
+                    </div>
+                `);
+            });
 
-                if (unknownWarranty.length) {
-                    blocks.push(...unknownWarranty.map(i => `
-                        <div class="attention-item">
-                            <h6>${escapeHtml(i.item_name || 'Item')}</h6>
-                            <p>Warranty status unknown. Update purchase date or warranty details.</p>
-                        </div>
-                    `));
-                }
+            items.filter(i => ['Active', 'Expiring Soon'].includes(i.warranty_status) && !Number(i.has_warranty_card || 0)).forEach(i => {
+                blocks.push(`
+                    <div class="attention-item">
+                        <h6>${escapeHtml(i.item_name || 'Item')}</h6>
+                        <p>Warranty card missing. Add it from Inventory for faster claim support.</p>
+                    </div>
+                `);
+            });
 
-                alerts.innerHTML = blocks.length
-                    ? `<div class="dashboard-attention-list">${blocks.join('')}</div>`
-                    : '<p class="text-muted mb-0">All items look healthy. No immediate follow-ups.</p>';
-            }
+            alerts.innerHTML = blocks.length
+                ? `<div class="dashboard-attention-list">${blocks.slice(0, 6).join('')}</div>`
+                : stateBlock('All items look healthy. No immediate follow-ups.');
         }
     } catch (e) {
         setText('dash-total', money(0));
@@ -502,12 +631,12 @@ async function loadDashboard() {
 
         const recentBody = byId('dash-recent-body');
         if (recentBody) {
-            recentBody.innerHTML = '<tr><td colspan="4" class="text-center p-4 text-danger">Could not load dashboard data.</td></tr>';
+            recentBody.innerHTML = stateRow(4, 'Could not load dashboard data.', true);
         }
 
         const alerts = byId('dash-alerts');
         if (alerts) {
-            alerts.innerHTML = '<p class="text-danger mb-0">Could not load alerts.</p>';
+            alerts.innerHTML = stateBlock('Could not load alerts.', true);
         }
     }
 }
@@ -515,7 +644,7 @@ async function loadDashboard() {
 async function attachWarrantyCard(id) {
     const picker = document.createElement('input');
     picker.type = 'file';
-    picker.accept = 'image/*,application/pdf';
+    picker.accept = '.jpg,.jpeg,.png,.webp,.pdf';
 
     picker.onchange = async () => {
         const file = picker.files && picker.files[0];
@@ -531,12 +660,13 @@ async function attachWarrantyCard(id) {
             });
             const data = await res.json();
             if (!res.ok) {
-                alert(data.error || 'Failed to attach warranty card.');
+                showToast(data.error || 'Failed to attach warranty card.', 'danger');
                 return;
             }
+            showToast('Warranty card attached.', 'success');
             await Promise.all([loadInventory(), loadDashboard()]);
         } catch (e) {
-            alert('Failed to upload warranty card.');
+            showToast('Failed to upload warranty card.', 'danger');
         }
     };
 
@@ -547,7 +677,11 @@ async function delItem(id) {
     if (!confirm('Delete this record permanently?')) return;
     const res = await fetch(`/api/delete/${id}`, { method: 'DELETE' });
     if (res.ok) {
+        showToast('Item deleted.', 'success');
         await Promise.all([loadInventory(), loadDashboard()]);
+    } else {
+        const data = await res.json().catch(() => ({}));
+        showToast(data.error || 'Failed to delete this record.', 'danger');
     }
 }
 
@@ -633,7 +767,7 @@ function renderAssistantAction(action) {
 
 function renderChatMessage(message) {
     const role = message.role === 'user' ? 'user' : 'assistant';
-    const safeContent = escapeHtml(message.content || '').replace(/\n/g, '<br>');
+    const safeContent = renderMessageContent(message.content, role);
     const bubbleClass = role === 'user' ? 'msg-user' : 'msg-ai';
     const when = formatTime(message.created_at);
     const actionHtml = role === 'assistant' ? renderAssistantAction(message.action) : '';
@@ -662,7 +796,7 @@ function renderRecentConversationsSidebar(conversations) {
 
     const items = Array.isArray(conversations) ? conversations : [];
     if (!items.length) {
-        container.innerHTML = '<div class="text-muted small">No conversations yet.</div>';
+        container.innerHTML = stateBlock('No conversations yet.');
         return;
     }
 
@@ -684,13 +818,14 @@ function renderRecentConversationsSidebar(conversations) {
     sortedKeys.forEach(key => {
         html += `<div class="conv-date-group"><div class="conv-date-label">${escapeHtml(groups[key].label)}</div>`;
         groups[key].items.forEach(item => {
-            const convId = String(item.conversation_id || '').replace(/\"/g, '&quot;');
-            const title = truncateText(item.title || 'New conversation', 46);
-            const preview = truncateText(item.preview || '', 70);
+            const convId = escapeHtml(String(item.conversation_id || ''));
+            // Long text is cut with a CSS ellipsis, so keep a generous limit here.
+            const title = truncateText(item.title || 'New conversation', 200);
+            const preview = truncateText(item.preview || '', 200);
             const isActive = item.conversation_id === currentConversationId ? 'active' : '';
             html += `
-                <button type="button" class="conv-item w-100 text-start ${isActive}" data-conversation-id="${convId}" onclick="openConversation('${convId}')">
-                    <div class="conv-preview"><strong>${escapeHtml(title)}</strong>${preview ? `<br>${escapeHtml(preview)}` : ''}</div>
+                <button type="button" class="conv-item w-100 text-start ${isActive}" data-action="open-conversation" data-conversation-id="${convId}">
+                    <div class="conv-preview"><strong class="conv-line">${escapeHtml(title)}</strong>${preview ? `<span class="conv-line">${escapeHtml(preview)}</span>` : ''}</div>
                     <div class="conv-time">${formatTime(item.updated_at || item.created_at) || ''}</div>
                 </button>
             `;
@@ -743,7 +878,7 @@ async function loadConversationList(query = '') {
 
     const container = byId('recentConversations');
     if (container) {
-        container.innerHTML = '<div class="text-muted small">Loading conversations...</div>';
+        container.innerHTML = stateBlock('Loading conversations...');
     }
 
     try {
@@ -809,7 +944,8 @@ async function clearChatHistory() {
     try {
         const res = await fetch('/api/chat/history', { method: 'DELETE' });
         if (!res.ok) {
-            alert('Failed to clear chat history.');
+            const data = await res.json().catch(() => ({}));
+            showToast(data.error || 'Failed to clear chat history.', 'danger');
             return;
         }
 
@@ -817,7 +953,7 @@ async function clearChatHistory() {
         startNewConversation();
         await loadConversationList('');
     } catch (e) {
-        alert('Failed to clear chat history.');
+        showToast('Failed to clear chat history.', 'danger');
     }
 }
 
@@ -828,7 +964,6 @@ async function sendMessage() {
     const msg = input.value.trim();
     if (!msg) return;
 
-    const historyForRequest = activeConversationMessages.map(m => ({ role: m.role, content: m.content }));
     const nowIso = new Date().toISOString();
     const userMessageObj = {
         id: generateLocalMessageId('user'),
@@ -847,7 +982,6 @@ async function sendMessage() {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 message: msg,
-                history: historyForRequest,
                 conversation_id: currentConversationId
             })
         });
@@ -1086,7 +1220,9 @@ async function sendReminderEmailsNow() {
 
         if (status) {
             status.className = 'small mt-3 mb-0 text-success';
-            status.innerText = `Reminder email sent to ${data.sent || 0} recipient(s).`;
+            status.innerText = data.sent
+                ? `Reminder email sent to ${data.sent} recipient(s).`
+                : (data.message || 'Nothing to send.');
         }
     } catch (e) {
         if (status) {
@@ -1096,7 +1232,30 @@ async function sendReminderEmailsNow() {
     }
 }
 
+// One delegated handler for buttons rendered from data, so names and ids never end up inside inline JS.
+document.addEventListener('click', (event) => {
+    const target = event.target.closest('[data-action]');
+    if (!target) return;
+
+    const itemId = Number(target.dataset.itemId);
+    switch (target.dataset.action) {
+        case 'attach-card':
+            attachWarrantyCard(itemId);
+            break;
+        case 'service-history':
+            openServiceHistory(itemId, target.dataset.itemName);
+            break;
+        case 'delete-item':
+            delItem(itemId);
+            break;
+        case 'open-conversation':
+            openConversation(target.dataset.conversationId);
+            break;
+    }
+});
+
 window.onload = async () => {
+    initDropZone();
     await loadSettings();
     await Promise.all([loadDashboard(), loadInventory()]);
     await loadSettingsIntoForm();

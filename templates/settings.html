@@ -64,7 +64,7 @@
                         <div class="col-12">
                             <label class="form-label fw-semibold" for="settingsCurrency">Currency</label>
                             <select id="settingsCurrency" class="form-select">
-                                <option value="INR" data-symbol="Rs">Indian Rupee (Rs)</option>
+                                <option value="INR" data-symbol="₹">Indian Rupee (₹)</option>
                                 <option value="USD" data-symbol="$">US Dollar ($)</option>
                                 <option value="EUR" data-symbol="€">Euro (€)</option>
                                 <option value="GBP" data-symbol="£">British Pound (£)</option>
@@ -75,7 +75,7 @@
                                 <option value="JPY" data-symbol="¥">Japanese Yen (¥)</option>
                                 <option value="CNY" data-symbol="¥">Chinese Yuan (¥)</option>
                             </select>
-                            <div class="form-text">Inventory values are converted from the stored base amount when displayed.</div>
+                            <div class="form-text">Symbol used when showing amounts. Receipt amounts are shown as recorded and are not converted.</div>
                         </div>
                     </div>
                 </div>
@@ -139,9 +139,75 @@
                     </div>
                 </div>
 
+                <div class="settings-group mb-4">
+                    <div class="settings-group-header">
+                        <div>
+                            <h2 class="settings-group-title">Alerts and reminders</h2>
+                            <p class="settings-group-note mb-0">Choose when items need attention and who gets warranty expiry emails.</p>
+                        </div>
+                        <span class="settings-group-badge">Alerts</span>
+                    </div>
+
+                    <div class="row g-3 mt-1">
+                        <div class="col-md-6">
+                            <label class="form-label fw-semibold" for="settingsExpiryAlertDays">Dashboard alert window (days)</label>
+                            <input id="settingsExpiryAlertDays" type="number" min="0" max="3650" class="form-control" placeholder="30">
+                            <div class="form-text">Items expiring within this many days, or expired within it, appear under Needs Attention.</div>
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label fw-semibold" for="settingsReminderDaysBefore">Email reminder window (days)</label>
+                            <input id="settingsReminderDaysBefore" type="number" min="0" max="3650" class="form-control" placeholder="30">
+                            <div class="form-text">Reminder emails list active warranties ending within this many days.</div>
+                        </div>
+                        <div class="col-12">
+                            <label class="settings-toggle">
+                                <input id="settingsRemindersEnabled" type="checkbox">
+                                <span>
+                                    <strong>Enable reminder emails</strong>
+                                    <small>Saves your preference. Emails are sent when you click "Send reminders now".</small>
+                                </span>
+                            </label>
+                        </div>
+                        <div class="col-12">
+                            <label class="form-label fw-semibold" for="settingsReminderRecipients">Recipients</label>
+                            <input id="settingsReminderRecipients" type="text" class="form-control" placeholder="you@example.com, family@example.com">
+                            <div class="form-text">Separate multiple addresses with commas.</div>
+                        </div>
+                        <div class="col-12">
+                            <label class="form-label fw-semibold" for="settingsReminderSubject">Email subject</label>
+                            <input id="settingsReminderSubject" type="text" class="form-control" maxlength="200">
+                        </div>
+                        <div class="col-12">
+                            <label class="form-label fw-semibold" for="settingsReminderBody">Line per item</label>
+                            <textarea id="settingsReminderBody" class="form-control" rows="2" maxlength="1000"></textarea>
+                            <div class="form-text">Placeholders: <code>{{ '{{item_name}}' }}</code>, <code>{{ '{{brand}}' }}</code>, <code>{{ '{{expiry_date}}' }}</code>, <code>{{ '{{days_remaining}}' }}</code></div>
+                        </div>
+                        <div class="col-md-8">
+                            <label class="form-label fw-semibold" for="settingsSmtpHost">SMTP host</label>
+                            <input id="settingsSmtpHost" type="text" class="form-control" placeholder="smtp.gmail.com">
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label fw-semibold" for="settingsSmtpPort">SMTP port</label>
+                            <input id="settingsSmtpPort" type="number" min="1" max="65535" class="form-control" placeholder="587">
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label fw-semibold" for="settingsSmtpUsername">SMTP username</label>
+                            <input id="settingsSmtpUsername" type="text" class="form-control" autocomplete="off">
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label fw-semibold" for="settingsSmtpSenderEmail">Sender email</label>
+                            <input id="settingsSmtpSenderEmail" type="email" class="form-control" placeholder="Defaults to the username">
+                        </div>
+                        <div class="col-12">
+                            <div class="form-text">The SMTP password is never stored here. Set <code>WARRANTY_SMTP_PASSWORD</code> in your <code>.env</code> file.</div>
+                        </div>
+                    </div>
+                </div>
+
                 <div class="d-flex flex-wrap gap-2 align-items-center">
                     <button type="submit" class="btn btn-primary">Save Settings</button>
                     <button type="button" class="btn btn-outline-secondary" onclick="loadSettingsIntoForm()">Reload</button>
+                    <button type="button" class="btn btn-outline-primary ms-auto" onclick="sendReminderEmailsNow()"><i class="bi bi-envelope"></i> Send reminders now</button>
                 </div>
 
                 <p id="settingsStatus" class="small mt-3 mb-0"></p>
@@ -178,4 +244,162 @@
         </div>
     </aside>
 </div>
+
+<section class="card section-card shadow-sm mt-4">
+    <div class="p-4 p-lg-5">
+        <div class="settings-group-header mb-3">
+            <div>
+                <h2 class="settings-group-title">Access & Workspace Collaboration</h2>
+                <p class="settings-group-note mb-0">Control who can access this Digital Twin. Protected under single-user control with family collaboration support.</p>
+            </div>
+            <span class="settings-group-badge">Security</span>
+        </div>
+
+        <div class="table-responsive mt-3">
+            <table class="table align-middle">
+                <thead>
+                    <tr class="text-muted small">
+                        <th>User</th>
+                        <th>Email</th>
+                        <th>Role</th>
+                        <th>Last Login</th>
+                        <th class="text-end">Actions</th>
+                    </tr>
+                </thead>
+                <tbody id="workspaceUsersTableBody">
+                    <tr>
+                        <td colspan="5" class="text-center text-muted py-3">Loading users...</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        {% if current_user and current_user.role == 'owner' %}
+        <div class="border-top pt-4 mt-3">
+            <h6 class="fw-bold mb-1"><i class="bi bi-person-plus-fill me-1 text-primary"></i> Authorize Family Member (Google Account)</h6>
+            <p class="small text-muted mb-3">Add family members by their Google email address so they can log in and view or manage your shared inventory.</p>
+            <form id="addFamilyMemberForm" class="row g-2 align-items-center" onsubmit="addFamilyMember(event)">
+                <div class="col-sm-5">
+                    <input type="email" id="familyEmail" class="form-control" placeholder="family.member@gmail.com" required>
+                </div>
+                <div class="col-sm-4">
+                    <input type="text" id="familyName" class="form-control" placeholder="Name or Nickname (optional)">
+                </div>
+                <div class="col-sm-3">
+                    <button type="submit" class="btn btn-outline-primary w-100">
+                        <i class="bi bi-shield-plus me-1"></i> Authorize Member
+                    </button>
+                </div>
+            </form>
+            <div id="addMemberStatus" class="small mt-2"></div>
+        </div>
+        {% endif %}
+    </div>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script>
+async function loadWorkspaceUsers() {
+    const tbody = document.getElementById('workspaceUsersTableBody');
+    if (!tbody) return;
+    try {
+        const res = await fetch('/api/auth/users');
+        if (!res.ok) {
+            tbody.innerHTML = '<tr><td colspan="5" class="text-danger py-2">Unable to load users.</td></tr>';
+            return;
+        }
+        const data = await res.json();
+        const users = data.users || [];
+        const canManage = data.can_manage;
+
+        if (users.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="5" class="text-muted text-center py-2">No users found.</td></tr>';
+            return;
+        }
+
+        tbody.innerHTML = users.map(u => {
+            const isOwner = u.role === 'owner';
+            const badgeClass = isOwner ? 'bg-primary' : 'bg-secondary';
+            const avatar = u.picture && /^https:\/\//.test(u.picture)
+                ? `<img src="${escapeHtml(u.picture)}" class="rounded-circle me-2" width="28" height="28" style="object-fit:cover;" referrerpolicy="no-referrer" alt="">`
+                : `<span class="rounded-circle bg-light text-dark border d-inline-flex align-items-center justify-content-center me-2 fw-semibold" style="width:28px;height:28px;font-size:0.75rem;">${escapeHtml((u.name || u.email || 'U')[0].toUpperCase())}</span>`;
+            
+            const deleteBtn = (!isOwner && canManage)
+                ? `<button class="btn btn-sm btn-outline-danger" data-user-id="${Number(u.id)}" data-user-email="${escapeHtml(u.email)}" onclick="removeWorkspaceUser(Number(this.dataset.userId), this.dataset.userEmail)"><i class="bi bi-trash"></i></button>`
+                : `<span class="text-muted small">&mdash;</span>`;
+
+            const lastLogin = u.last_login ? new Date(u.last_login).toLocaleDateString() : 'Never';
+
+            return `
+                <tr>
+                    <td>
+                        <div class="d-flex align-items-center">
+                            ${avatar}
+                            <span class="fw-semibold">${escapeHtml(u.name || 'Member')}</span>
+                        </div>
+                    </td>
+                    <td class="text-muted">${escapeHtml(u.email)}</td>
+                    <td><span class="badge ${badgeClass} text-uppercase" style="font-size:0.7rem;">${escapeHtml(u.role)}</span></td>
+                    <td class="text-muted small">${lastLogin}</td>
+                    <td class="text-end">${deleteBtn}</td>
+                </tr>
+            `;
+        }).join('');
+    } catch (e) {
+        tbody.innerHTML = '<tr><td colspan="5" class="text-danger py-2">Network error loading users.</td></tr>';
+    }
+}
+
+async function addFamilyMember(e) {
+    e.preventDefault();
+    const emailInput = document.getElementById('familyEmail');
+    const nameInput = document.getElementById('familyName');
+    const statusDiv = document.getElementById('addMemberStatus');
+    const email = emailInput.value.trim();
+    const name = nameInput.value.trim();
+
+    statusDiv.className = 'small mt-2 text-muted';
+    statusDiv.innerText = 'Authorizing...';
+
+    try {
+        const res = await fetch('/api/auth/users', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ email, name, role: 'member' })
+        });
+        const data = await res.json();
+        if (res.ok) {
+            statusDiv.className = 'small mt-2 text-success';
+            statusDiv.innerText = data.message || 'Member successfully authorized.';
+            emailInput.value = '';
+            nameInput.value = '';
+            loadWorkspaceUsers();
+        } else {
+            statusDiv.className = 'small mt-2 text-danger';
+            statusDiv.innerText = data.error || 'Failed to authorize member.';
+        }
+    } catch (err) {
+        statusDiv.className = 'small mt-2 text-danger';
+        statusDiv.innerText = 'Network error while adding member.';
+    }
+}
+
+async function removeWorkspaceUser(userId, email) {
+    if (!confirm(`Are you sure you want to revoke access for ${email}?`)) return;
+    try {
+        const res = await fetch(`/api/auth/users/${userId}`, { method: 'DELETE' });
+        const data = await res.json();
+        if (res.ok) {
+            loadWorkspaceUsers();
+        } else {
+            showToast(data.error || 'Failed to remove user', 'danger');
+        }
+    } catch (e) {
+        showToast('Network error while removing user', 'danger');
+    }
+}
+
+document.addEventListener('DOMContentLoaded', loadWorkspaceUsers);
+</script>
 {% endblock %}

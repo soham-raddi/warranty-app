@@ -1,12 +1,46 @@
+import re
 import sqlite3
+import threading
 from datetime import datetime, timedelta
 
-conn = sqlite3.connect('inventory.db', check_same_thread=False)
-cursor = conn.cursor()
+DB_PATH = 'inventory.db'
+_local = threading.local()
+
+
+def _thread_connection():
+    """Each server thread gets its own connection, so concurrent requests never share a cursor."""
+    if getattr(_local, 'conn', None) is None:
+        _local.conn = sqlite3.connect(DB_PATH, timeout=10)
+        _local.cursor = _local.conn.cursor()
+    return _local.conn
+
+
+class _ThreadLocalProxy:
+    """Forwards attribute access to this thread's connection or cursor."""
+
+    def __init__(self, attribute):
+        self._attribute = attribute
+
+    def __getattr__(self, name):
+        _thread_connection()
+        return getattr(getattr(_local, self._attribute), name)
+
+
+conn = _ThreadLocalProxy('conn')
+cursor = _ThreadLocalProxy('cursor')
+
+# WAL lets readers proceed while another request is writing.
+_thread_connection().execute('PRAGMA journal_mode=WAL')
+
+# Display symbol for each supported currency; the symbol is always derived from the code.
+CURRENCY_SYMBOLS = {
+    'INR': '₹', 'USD': '$', 'EUR': '€', 'GBP': '£', 'AED': 'د.إ',
+    'CAD': 'CA$', 'AUD': 'A$', 'SGD': 'S$', 'JPY': '¥', 'CNY': 'CN¥',
+}
 
 DEFAULT_SETTINGS = {
     'timezone': 'UTC',
-    'currency_symbol': 'Rs',
+    'currency_symbol': '₹',
     'currency_code': 'INR',
     'warranty_period_days': '365',
     'theme_mode': 'system',
@@ -83,6 +117,21 @@ for _key, _value in DEFAULT_SETTINGS.items():
     )
 conn.commit()
 
+cursor.execute('''
+    CREATE TABLE IF NOT EXISTS users (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        google_id TEXT UNIQUE,
+        email TEXT UNIQUE NOT NULL,
+        name TEXT,
+        picture TEXT,
+        role TEXT NOT NULL DEFAULT 'owner',
+        is_active INTEGER NOT NULL DEFAULT 1,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        last_login TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )
+''')
+conn.commit()
+
 try:
     cursor.execute('ALTER TABLE chat_messages ADD COLUMN conversation_id TEXT NOT NULL DEFAULT ""')
 except sqlite3.OperationalError:
@@ -111,25 +160,30 @@ except sqlite3.OperationalError:
 
 conn.commit()
 
+# Earlier extractions stored placeholders such as "not found"; store them as empty instead.
+PLACEHOLDER_VALUES = ('', 'n/a', 'na', 'none', 'null', 'unknown', 'not found', 'not available',
+                      'not mentioned', 'not specified', 'not specified on receipt', '-')
+_TEXT_COLUMNS = ('item_name', 'brand', 'model_number', 'serial_number', 'category', 'date_of_purchase',
+                 'price', 'tax_amount', 'total_amount', 'payment_method', 'store_name', 'store_contact',
+                 'warranty_info', 'return_policy', 'invoice_number')
+_placeholder_marks = ', '.join('?' for _ in PLACEHOLDER_VALUES)
+for _column in _TEXT_COLUMNS:
+    cursor.execute(
+        f'UPDATE appliances_v5 SET {_column} = NULL WHERE LOWER(TRIM({_column})) IN ({_placeholder_marks})',
+        PLACEHOLDER_VALUES
+    )
 
-def _has_warranty_card(data):
-    warranty_text = str(data.get("warranty_info") or "").strip().lower()
-    unknown_markers = {
-        "",
-        "n/a",
-        "na",
-        "none",
-        "unknown",
-        "not available",
-        "not mentioned",
-        "not specified",
-        "not specified on receipt"
-    }
-    return 0 if warranty_text in unknown_markers else 1
+# "Has warranty card" means a card file is attached, not that the receipt mentions a warranty.
+cursor.execute('''
+    UPDATE appliances_v5
+    SET has_warranty_card = CASE WHEN COALESCE(warranty_card_path, '') != '' THEN 1 ELSE 0 END
+''')
+conn.commit()
+
 
 def save_receipt_to_db(data):
     if "error" in data: return False
-    has_warranty_card = _has_warranty_card(data)
+    has_warranty_card = 1 if data.get("warranty_card_path") else 0
 
     cursor.execute('''
         INSERT INTO appliances_v5 (
@@ -149,6 +203,24 @@ def save_receipt_to_db(data):
     conn.commit()
     return True
 
+def find_duplicate_receipt(invoice_number, store_name, item_name):
+    """Returns the id of an item already saved from the same invoice, or None."""
+    if not invoice_number:
+        return None
+    cursor.execute(
+        '''
+        SELECT id FROM appliances_v5
+        WHERE LOWER(TRIM(invoice_number)) = LOWER(TRIM(?))
+          AND LOWER(TRIM(COALESCE(store_name, ''))) = LOWER(TRIM(COALESCE(?, '')))
+          AND LOWER(TRIM(COALESCE(item_name, ''))) = LOWER(TRIM(COALESCE(?, '')))
+        LIMIT 1
+        ''',
+        (invoice_number, store_name, item_name)
+    )
+    row = cursor.fetchone()
+    return row[0] if row else None
+
+
 def get_all_appliances():
     cursor.execute('SELECT * FROM appliances_v5')
     rows = cursor.fetchall()
@@ -161,8 +233,49 @@ def delete_appliance(item_id):
     file_path = row[0] if row else None
     warranty_card_path = row[1] if row else None
     cursor.execute('DELETE FROM appliances_v5 WHERE id = ?', (item_id,))
+    cursor.execute('DELETE FROM service_history WHERE item_id = ?', (item_id,))
     conn.commit()
     return file_path, warranty_card_path
+
+
+def get_appliance_file_paths(item_id):
+    cursor.execute('SELECT file_path, warranty_card_path FROM appliances_v5 WHERE id = ?', (item_id,))
+    row = cursor.fetchone()
+    return (row[0], row[1]) if row else (None, None)
+
+
+def relocate_upload_paths(old_root, new_root):
+    """Rewrites stored file paths that point inside old_root so they point inside new_root."""
+    old_prefix = old_root.replace('\\', '/').rstrip('/') + '/'
+    new_prefix = new_root.replace('\\', '/').rstrip('/') + '/'
+
+    def relocate(path):
+        if not path:
+            return path
+        normalized = path.replace('\\', '/')
+        return new_prefix + normalized[len(old_prefix):] if normalized.startswith(old_prefix) else path
+
+    cursor.execute('SELECT id, file_path, warranty_card_path FROM appliances_v5')
+    for item_id, file_path, warranty_card_path in cursor.fetchall():
+        new_file_path = relocate(file_path)
+        new_card_path = relocate(warranty_card_path)
+        if (new_file_path, new_card_path) != (file_path, warranty_card_path):
+            cursor.execute(
+                'UPDATE appliances_v5 SET file_path = ?, warranty_card_path = ? WHERE id = ?',
+                (new_file_path, new_card_path, item_id)
+            )
+    conn.commit()
+
+
+def parse_amount(value):
+    """Extracts a number from amounts like '₹1,299.00', 'Rs. 1,200' or 'INR 500'. Returns None if absent."""
+    match = re.search(r'-?\d[\d,]*(?:\.\d+)?', str(value or ''))
+    if not match:
+        return None
+    try:
+        return float(match.group(0).replace(',', ''))
+    except ValueError:
+        return None
 
 
 def update_warranty_card(item_id, warranty_card_path):
@@ -199,50 +312,54 @@ def get_inventory_analytics():
     alerts = []
     
     for item in items:
-        try:
-            val = str(item['total_amount']).replace('₹', '').replace('$', '').replace(',', '').strip()
-            total_spent += float(val)
-        except: pass
-            
+        amount = parse_amount(item.get('total_amount'))
+        if amount is not None:
+            total_spent += amount
+
         try:
             p_date = datetime.strptime(item['date_of_purchase'], '%Y-%m-%d')
-            expiry_date = p_date + timedelta(days=warranty_period_days)
-            days_remaining = (expiry_date.date() - datetime.now().date()).days
-            item['warranty_expires_on'] = expiry_date.strftime('%Y-%m-%d')
-            item['days_remaining'] = days_remaining
-
-            if days_remaining >= 0 and days_remaining <= alert_window_days:
-                item['warranty_status'] = 'Expiring Soon'
-                alerts.append({
-                    'id': item.get('id'),
-                    'item_name': item.get('item_name') or 'Item',
-                    'status': 'expiring_soon',
-                    'days_remaining': days_remaining,
-                    'expiry_date': item['warranty_expires_on'],
-                    'category': item.get('category') or 'N/A',
-                    'brand': item.get('brand') or 'N/A'
-                })
-            elif days_remaining < 0:
-                item['warranty_status'] = 'Expired'
-                alerts.append({
-                    'id': item.get('id'),
-                    'item_name': item.get('item_name') or 'Item',
-                    'status': 'expired',
-                    'days_remaining': days_remaining,
-                    'expiry_date': item['warranty_expires_on'],
-                    'category': item.get('category') or 'N/A',
-                    'brand': item.get('brand') or 'N/A'
-                })
-            elif (datetime.now() - p_date).days < warranty_period_days:
-                active_warranties += 1
-                item['warranty_status'] = "Active"
-            else:
-                item['warranty_status'] = "Expired"
-        except:
+        except (TypeError, ValueError):
             item['warranty_status'] = "Unknown"
             item['warranty_expires_on'] = None
             item['days_remaining'] = None
-            
+            continue
+
+        expiry_date = p_date + timedelta(days=warranty_period_days)
+        days_remaining = (expiry_date.date() - datetime.now().date()).days
+        item['warranty_expires_on'] = expiry_date.strftime('%Y-%m-%d')
+        item['days_remaining'] = days_remaining
+
+        if days_remaining >= 0 and days_remaining <= alert_window_days:
+            # Still covered, so it counts as an active warranty too
+            active_warranties += 1
+            item['warranty_status'] = 'Expiring Soon'
+            alerts.append({
+                'id': item.get('id'),
+                'item_name': item.get('item_name') or 'Item',
+                'status': 'expiring_soon',
+                'days_remaining': days_remaining,
+                'expiry_date': item['warranty_expires_on'],
+                'category': item.get('category') or 'N/A',
+                'brand': item.get('brand') or 'N/A'
+            })
+        elif days_remaining < 0:
+            item['warranty_status'] = 'Expired'
+            # Only recently expired items need attention; older ones are no longer actionable.
+            if -days_remaining > alert_window_days:
+                continue
+            alerts.append({
+                'id': item.get('id'),
+                'item_name': item.get('item_name') or 'Item',
+                'status': 'expired',
+                'days_remaining': days_remaining,
+                'expiry_date': item['warranty_expires_on'],
+                'category': item.get('category') or 'N/A',
+                'brand': item.get('brand') or 'N/A'
+            })
+        else:
+            active_warranties += 1
+            item['warranty_status'] = "Active"
+
     return items, round(total_spent, 2), active_warranties, alerts
 
 
@@ -476,4 +593,112 @@ def get_all_settings():
     rows = cursor.fetchall()
     for row in rows:
         result[row[0]] = row[1]
+    result['currency_symbol'] = CURRENCY_SYMBOLS.get(result.get('currency_code'), result.get('currency_symbol'))
     return result
+
+
+def _row_to_user(row):
+    if not row:
+        return None
+    return {
+        'id': row[0],
+        'google_id': row[1],
+        'email': row[2],
+        'name': row[3],
+        'picture': row[4],
+        'role': row[5],
+        'is_active': bool(row[6]),
+        'created_at': row[7],
+        'last_login': row[8],
+    }
+
+
+def get_user_by_id(user_id):
+    cursor.execute('SELECT id, google_id, email, name, picture, role, is_active, created_at, last_login FROM users WHERE id = ?', (user_id,))
+    return _row_to_user(cursor.fetchone())
+
+
+def get_user_by_email(email):
+    if not email:
+        return None
+    cursor.execute('SELECT id, google_id, email, name, picture, role, is_active, created_at, last_login FROM users WHERE LOWER(email) = LOWER(?)', (email.strip(),))
+    return _row_to_user(cursor.fetchone())
+
+
+def get_user_by_google_id(google_id):
+    if not google_id:
+        return None
+    cursor.execute('SELECT id, google_id, email, name, picture, role, is_active, created_at, last_login FROM users WHERE google_id = ?', (str(google_id),))
+    return _row_to_user(cursor.fetchone())
+
+
+def get_owner_user():
+    cursor.execute('SELECT id, google_id, email, name, picture, role, is_active, created_at, last_login FROM users WHERE role = "owner" ORDER BY id ASC LIMIT 1')
+    return _row_to_user(cursor.fetchone())
+
+
+def count_users():
+    cursor.execute('SELECT COUNT(*) FROM users')
+    return cursor.fetchone()[0]
+
+
+def list_users():
+    cursor.execute('SELECT id, google_id, email, name, picture, role, is_active, created_at, last_login FROM users ORDER BY id ASC')
+    return [_row_to_user(row) for row in cursor.fetchall()]
+
+
+def upsert_user(google_id, email, name=None, picture=None, default_role='owner'):
+    clean_email = email.strip().lower()
+    user = get_user_by_email(clean_email)
+    now = datetime.now().isoformat()
+    if user:
+        cursor.execute('''
+            UPDATE users
+            SET google_id = COALESCE(?, google_id),
+                name = COALESCE(?, name),
+                picture = COALESCE(?, picture),
+                last_login = ?
+            WHERE id = ?
+        ''', (google_id, name, picture, now, user['id']))
+        conn.commit()
+        return get_user_by_id(user['id'])
+    else:
+        cursor.execute('''
+            INSERT INTO users (google_id, email, name, picture, role, is_active, created_at, last_login)
+            VALUES (?, ?, ?, ?, ?, 1, ?, ?)
+        ''', (google_id, clean_email, name or clean_email, picture or '', default_role, now, now))
+        conn.commit()
+        return get_user_by_id(cursor.lastrowid)
+
+
+def make_sole_owner(user_id):
+    """Makes user_id the workspace owner and demotes any other owners (such as the dev-login placeholder) to admin."""
+    cursor.execute("UPDATE users SET role = 'admin' WHERE role = 'owner' AND id != ?", (user_id,))
+    cursor.execute("UPDATE users SET role = 'owner', is_active = 1 WHERE id = ?", (user_id,))
+    conn.commit()
+    return get_user_by_id(user_id)
+
+
+def add_authorized_user(email, name='', role='member'):
+    clean_email = email.strip().lower()
+    existing = get_user_by_email(clean_email)
+    if existing:
+        return existing, False
+    now = datetime.now().isoformat()
+    cursor.execute('''
+        INSERT INTO users (google_id, email, name, picture, role, is_active, created_at, last_login)
+        VALUES (NULL, ?, ?, '', ?, 1, ?, ?)
+    ''', (clean_email, name.strip() or clean_email, role, now, now))
+    conn.commit()
+    return get_user_by_id(cursor.lastrowid), True
+
+
+def delete_user(user_id):
+    user = get_user_by_id(user_id)
+    if not user:
+        return False, "User not found"
+    if user['role'] == 'owner':
+        return False, "Cannot delete owner user"
+    cursor.execute('DELETE FROM users WHERE id = ?', (user_id,))
+    conn.commit()
+    return True, "User deleted successfully"

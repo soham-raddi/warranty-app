@@ -1,86 +1,91 @@
 import os
+import re
 import datetime
 import json
-import base64
-import io
-import fitz 
-from PIL import Image
-from dotenv import load_dotenv
-from groq import Groq
-from database import get_inventory_analytics
-from thefuzz import process, fuzz
+from database import get_all_settings, get_inventory_analytics
+from llm_extractor import CHAT_MODEL, VISION_MODEL, encode_image, get_client
+from thefuzz import fuzz
 
-load_dotenv()
-client = Groq(api_key=os.getenv("GROQ_API_KEY"))
+# A message word must be this similar to an item word (0-100) to count as a mention; tolerates typos.
+WORD_MATCH_THRESHOLD = 85
+CHAT_ROLES = {'user', 'assistant'}
+# Words that appear in product names or questions but say nothing about which item is meant.
+MATCH_STOPWORDS = {
+    'the', 'and', 'for', 'with', 'from', 'what', 'when', 'which', 'this', 'that', 'my', 'inch', 'pack',
+    'new', 'black', 'white', 'blue', 'grey', 'gray', 'silver', 'core', 'chip', 'gen', 'pro', 'max', 'plus',
+    'warranty', 'receipt', 'invoice', 'item', 'product', 'card', 'bill',
+}
+
+
+def _match_words(text):
+    words = re.findall(r'[a-z][a-z0-9]+', str(text or '').lower())
+    return {w for w in words if len(w) >= 3 and w not in MATCH_STOPWORDS}
+
 
 def find_item_fuzzy(user_msg, items):
-    item_names = [i['item_name'] for i in items if i['item_name']]
-    if not item_names: return None
-    match, score = process.extractOne(user_msg, item_names, scorer=fuzz.partial_ratio)
-    if score > 50: 
-        return next(item for item in items if item['item_name'] == match)
-    return None
+    """Returns the item whose name or brand words are mentioned in the message, or None."""
+    message_words = _match_words(user_msg)
+    if not message_words:
+        return None
 
-def encode_image(file_path):
-    """Converts images or PDFs to Base64, with compression to prevent API timeouts."""
-    encoded_images = []
-    if file_path.lower().endswith('.pdf'):
-        doc = fitz.open(file_path)
-        for i in range(min(len(doc), 3)):
-            page = doc.load_page(i)
-            pix = page.get_pixmap(matrix=fitz.Matrix(2, 2))
-            img_bytes = pix.tobytes("png")
-            encoded_images.append((base64.b64encode(img_bytes).decode('utf-8'), "image/png"))
-        doc.close()
-    else:
-        with Image.open(file_path) as img:
-            if img.mode != 'RGB':
-                img = img.convert('RGB')
-            max_width = 1200
-            if img.width > max_width:
-                ratio = max_width / float(img.width)
-                new_size = (max_width, int(float(img.height) * float(ratio)))
-                img = img.resize(new_size, Image.Resampling.LANCZOS)
-            
-            buffer = io.BytesIO()
-            img.save(buffer, format="JPEG", quality=85)
-            img_bytes = buffer.getvalue()
-            
-            encoded_images.append((base64.b64encode(img_bytes).decode('utf-8'), "image/jpeg"))
-    return encoded_images
+    best_item, best_score = None, 0
+    for item in items:
+        item_words = _match_words(f"{item.get('item_name') or ''} {item.get('brand') or ''}")
+        score = sum(
+            1 for word in item_words
+            if any(fuzz.ratio(word, msg_word) >= WORD_MATCH_THRESHOLD for msg_word in message_words)
+        )
+        if score > best_score:
+            best_item, best_score = item, score
+    return best_item
+
 
 def ask_digital_twin(user_message, chat_history):
-    items, total, active = get_inventory_analytics()
+    items, total, active, _alerts = get_inventory_analytics()
+    settings = get_all_settings()
+    currency_code = settings.get('currency_code', 'INR')
+    currency_symbol = settings.get('currency_symbol', '₹')
     
     today = datetime.date.today().strftime("%B %d, %Y")
-    clean_items = [{k: v for k, v in i.items() if k not in ['id', 'file_path'] and v} for i in items]
+    # Keep zeros (e.g. has_warranty_card=0, days_remaining=0); drop only empty values and local file paths.
+    hidden_fields = {'id', 'file_path', 'warranty_card_path'}
+    clean_items = [{k: v for k, v in i.items() if k not in hidden_fields and v not in (None, '')} for i in items]
     db_summary = json.dumps(clean_items)
     
     sys_prompt = (
         f"Today is {today}. You are an intelligent Digital Twin Assistant managing a user's inventory. "
         f"Here is their full database in JSON format: {db_summary}. "
-        f"Overall Stats: Total Spent=₹{total}, Active Warranties={active}. "
+        f"Overall Stats: Total Spent={currency_symbol}{total}, Active Warranties={active}. "
+        f"Amounts in the data are in {currency_code}; always write money with the {currency_symbol} symbol. "
         "Answer the user's query conversationally. Pay close attention to the Chat History to understand context. "
         "CRITICAL: Always read the 'total_amount' and 'price' fields in the JSON when a user asks about spending or costs. Do not claim data is missing if it exists in the JSON. "
-        "If a specific duration for a warranty isn't explicitly listed, logically deduce standard terms if appropriate."
+        "Each item's 'warranty_status', 'warranty_expires_on' and 'days_remaining' are computed by the app and are authoritative; "
+        "use them directly when asked whether something is under warranty. A status of 'Unknown' means the purchase date is missing. "
+        "'has_warranty_card' is 1 when a warranty card file is attached and 0 when it is not."
     )
     
     messages = [{"role": "system", "content": sys_prompt}]
     for msg in chat_history:
-        messages.append({"role": msg['role'], "content": msg['content']})
+        # Only replay real conversation turns; never let stored or client data inject system prompts.
+        if msg.get('role') in CHAT_ROLES and msg.get('content'):
+            messages.append({"role": msg['role'], "content": str(msg['content'])})
 
-    target_model = "llama-3.3-70b-versatile"
-    target_item = find_item_fuzzy(user_message.lower(), items)
+    target_model = CHAT_MODEL
+    target_item = find_item_fuzzy(user_message, items)
     action = None
 
-    if target_item and int(target_item.get('has_warranty_card') or 0) == 0:
+    def needs_card(item):
+        # A card only helps with claims while the warranty is still running.
+        return int(item.get('has_warranty_card') or 0) == 0 and item.get('warranty_status') in ('Active', 'Expiring Soon')
+
+    if target_item and needs_card(target_item):
         action = {
             "type": "attach_warranty_card",
             "item_id": target_item.get('id'),
             "item_name": target_item.get('item_name') or "this item"
         }
-    elif any(k in user_message.lower() for k in ["warranty card", "attach card", "missing card"]):
-        first_missing = next((i for i in items if int(i.get('has_warranty_card') or 0) == 0), None)
+    elif not target_item and any(k in user_message.lower() for k in ["warranty card", "attach card", "missing card"]):
+        first_missing = next((i for i in items if needs_card(i)), None)
         if first_missing:
             action = {
                 "type": "attach_warranty_card",
@@ -91,7 +96,7 @@ def ask_digital_twin(user_message, chat_history):
     if target_item and target_item.get('file_path') and os.path.exists(target_item['file_path']):
         try:
             image_list = encode_image(target_item['file_path'])
-            target_model = "meta-llama/llama-4-scout-17b-16e-instruct"
+            target_model = VISION_MODEL
             
             content_payload = [{"type": "text", "text": f"{user_message}\n\n[System Note: I have attached the original receipt documents for the mentioned item. Use them to find fine-print details.]"}]
             for base64_image, mime_type in image_list:
@@ -108,7 +113,7 @@ def ask_digital_twin(user_message, chat_history):
         messages.append({"role": "user", "content": user_message})
 
     try:
-        chat_completion = client.chat.completions.create(
+        chat_completion = get_client().chat.completions.create(
             model=target_model,
             messages=messages,
             temperature=0.5
@@ -118,9 +123,12 @@ def ask_digital_twin(user_message, chat_history):
             "reply": reply,
             "action": action
         }
+    except RuntimeError as e:
+        return {"reply": str(e), "action": action, "error": True}
     except Exception as e:
         print(f"Groq Error: {e}")
         return {
-            "reply": "I'm having trouble connecting right now.",
-            "action": action
+            "reply": "I'm having trouble reaching the AI service right now. Please try again in a moment.",
+            "action": action,
+            "error": True
         }

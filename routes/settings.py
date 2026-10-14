@@ -4,7 +4,8 @@ from email.message import EmailMessage
 
 from flask import Blueprint, jsonify, request
 
-from database import get_all_settings, get_inventory_analytics, set_setting_value
+from database import CURRENCY_SYMBOLS, get_all_settings, get_inventory_analytics, set_setting_value
+from .auth import role_required
 
 settings_bp = Blueprint('settings', __name__)
 
@@ -25,6 +26,23 @@ def _normalize_text(payload, key, default_value=''):
     return str(payload.get(key, default_value)).strip()
 
 
+DEFAULT_REMINDER_BODY = 'Your warranty for {{item_name}} expires on {{expiry_date}}. Days left: {{days_remaining}}.'
+
+
+def _render_reminder(template, item):
+    """Fills the reminder template placeholders for one item."""
+    values = {
+        'item_name': item.get('item_name') or 'Item',
+        'brand': item.get('brand') or '',
+        'expiry_date': item.get('warranty_expires_on') or 'unknown',
+        'days_remaining': item.get('days_remaining'),
+    }
+    rendered = template
+    for key, value in values.items():
+        rendered = rendered.replace('{{' + key + '}}', str(value))
+    return f"- {rendered}"
+
+
 def _parse_recipients(raw_value):
     values = str(raw_value or '').replace(';', ',').replace('\n', ',').split(',')
     return [value.strip() for value in values if value.strip()]
@@ -36,12 +54,12 @@ def get_settings():
 
 
 @settings_bp.route('/api/settings', methods=['PUT'])
+@role_required('owner', 'admin')
 def update_settings():
     payload = request.json or {}
 
     timezone = str(payload.get('timezone', 'UTC')).strip() or 'UTC'
     currency_code = str(payload.get('currency_code', 'INR')).strip().upper() or 'INR'
-    currency_symbol = str(payload.get('currency_symbol', 'Rs')).strip() or 'Rs'
     theme_mode = _pick_option(payload, 'theme_mode', 'system', {'system', 'light', 'dark'})
     accent_color = _pick_option(payload, 'accent_color', 'blue', {'blue', 'teal', 'amber', 'rose', 'slate'})
     date_format = _pick_option(payload, 'date_format', 'auto', {'auto', 'iso', 'dmy', 'mdy', 'long'})
@@ -72,9 +90,9 @@ def update_settings():
     smtp_username = _normalize_text(payload, 'smtp_username', '')
     smtp_sender_email = _normalize_text(payload, 'smtp_sender_email', '')
 
-    allowed_currency_codes = {'INR', 'USD', 'EUR', 'GBP', 'AUD', 'CAD', 'AED', 'SGD', 'JPY', 'CNY'}
-    if currency_code not in allowed_currency_codes:
+    if currency_code not in CURRENCY_SYMBOLS:
         return jsonify({'error': 'currency_code must be a supported currency'}), 400
+    currency_symbol = CURRENCY_SYMBOLS[currency_code]
 
     if not theme_mode:
         return jsonify({'error': 'theme_mode must be system, light, or dark'}), 400
@@ -124,18 +142,34 @@ def update_settings():
 
 
 @settings_bp.route('/api/reminders/send', methods=['POST'])
+@role_required('owner', 'admin')
 def send_reminders_now():
     settings = get_all_settings()
-    items, _, _, alerts = get_inventory_analytics()
-    if not alerts:
-        return jsonify({'message': 'No warranty alerts to send', 'sent': 0, 'alerts': []})
+    items, _, _, _ = get_inventory_analytics()
+
+    try:
+        reminder_days_before = max(0, int(settings.get('reminder_days_before', '30')))
+    except (TypeError, ValueError):
+        reminder_days_before = 30
+
+    # Remind only about warranties that are still active and end within the reminder window.
+    due_items = [
+        item for item in items
+        if isinstance(item.get('days_remaining'), int) and 0 <= item['days_remaining'] <= reminder_days_before
+    ]
+    if not due_items:
+        return jsonify({'message': f'No warranties expire in the next {reminder_days_before} days', 'sent': 0, 'alerts': []})
 
     recipients = _parse_recipients(settings.get('reminder_recipients', ''))
     if not recipients:
         return jsonify({'error': 'No reminder recipients configured'}), 400
 
+    try:
+        smtp_port = int(str(settings.get('smtp_port', '587')).strip() or '587')
+    except ValueError:
+        return jsonify({'error': 'SMTP port must be a number'}), 400
+
     smtp_host = str(settings.get('smtp_host', '')).strip()
-    smtp_port = int(str(settings.get('smtp_port', '587')).strip() or '587')
     smtp_username = str(settings.get('smtp_username', '')).strip()
     smtp_sender_email = str(settings.get('smtp_sender_email', '')).strip() or smtp_username
     smtp_password = os.environ.get('WARRANTY_SMTP_PASSWORD') or os.environ.get('SMTP_PASSWORD')
@@ -146,27 +180,13 @@ def send_reminders_now():
         return jsonify({'error': 'SMTP password must be provided via WARRANTY_SMTP_PASSWORD or SMTP_PASSWORD'}), 400
 
     subject = str(settings.get('reminder_subject', 'Warranty expiry reminder')).strip() or 'Warranty expiry reminder'
-    body_template = str(settings.get('reminder_body', '')).strip() or 'Your warranty for {{item_name}} expires on {{expiry_date}}. Days left: {{days_remaining}}.'
+    body_template = str(settings.get('reminder_body', '')).strip() or DEFAULT_REMINDER_BODY
 
-    lines = []
-    for alert in alerts:
-        lines.append(
-            f"- {alert.get('item_name', 'Item')} | {alert.get('brand', 'N/A')} | expires {alert.get('expiry_date', 'N/A')} | {alert.get('days_remaining', 'N/A')} days left"
-        )
-
-    email_body = [
-        'Warranty expiry reminders',
-        '',
-        'The following products need attention:',
-        *lines,
-        '',
-        'Alert rules:',
-        f"- Active reminder window: {settings.get('reminder_days_before', '30')} days",
-        f"- Reminder enabled: {settings.get('reminders_enabled', '0')}",
-        '',
-        'Custom template preview:',
-        body_template,
+    lines = [
+        _render_reminder(body_template, item)
+        for item in sorted(due_items, key=lambda i: i['days_remaining'])
     ]
+    email_body = ['Warranty expiry reminders', '', *lines]
 
     msg = EmailMessage()
     msg['From'] = smtp_sender_email
@@ -183,6 +203,9 @@ def send_reminders_now():
                 server.login(smtp_sender_email, smtp_password)
             server.send_message(msg)
     except Exception as exc:
-        return jsonify({'error': f'Failed to send reminders: {exc}'}), 500
+        print(f"Reminder email error: {exc}")
+        return jsonify({'error': 'Failed to send reminder email. Check the SMTP settings and password.'}), 500
 
+    alerts = [{'id': i.get('id'), 'item_name': i.get('item_name'), 'expiry_date': i.get('warranty_expires_on'),
+               'days_remaining': i.get('days_remaining')} for i in due_items]
     return jsonify({'message': 'Reminder email sent successfully', 'sent': len(recipients), 'alerts': alerts})

@@ -9,10 +9,10 @@ This application allows you to digitize receipts and invoices (both images and m
 ## Features
 
 * **Smart Digitization:** Drag-and-drop receipt images (JPG/PNG) or multi-page PDF invoices.
-* **Universal Data Extraction:** Powered by Groq's lightning-fast `meta-llama/llama-4-scout-17b-16e-instruct` vision model. It intelligently ignores shipping fees or platform charges and extracts exact pricing, warranty info, and invoice numbers for your primary purchases.
-* **Conversational AI Assistant:** A chatbot (powered by `llama-3.3-70b-versatile`) that remembers your chat history. It uses fuzzy matching to automatically pull up the relevant receipt image from your hard drive to answer highly specific questions about the fine print.
+* **Universal Data Extraction:** Powered by a Groq vision model (default `qwen/qwen3.8-27b`, configurable with `GROQ_VISION_MODEL`). It intelligently ignores shipping fees or platform charges and extracts exact pricing, warranty info, and invoice numbers for your primary purchases.
+* **Conversational AI Assistant:** A chatbot (default `openai/gpt-oss-120b`, configurable with `GROQ_CHAT_MODEL`) that remembers your chat history. It uses fuzzy matching to automatically pull up the relevant receipt image from your hard drive to answer highly specific questions about the fine print.
 * **Auto-Compression Engine:** Built-in image compression and PDF slicing (via Pillow and PyMuPDF) ensures massive smartphone photos and long documents are processed in milliseconds without crashing the API.
-* **Local Privacy First:** Fast, local SQLite storage (`inventory.db`) ensures your personal financial data stays securely on your machine.
+* **Local Storage:** Inventory data lives in a local SQLite database (`inventory.db`) and uploaded documents in a private `uploads/` folder that is only served to signed-in users. Note that receipt images are sent to the Groq API for extraction and chat.
 * **Analytics Dashboard:** Instantly tracks your total financial investment and counts active warranties.
 
 ---
@@ -71,12 +71,24 @@ pip install -r requirements.txt
 ```
 
 ### 4. Configure Environment Variables
-Create a file named .env in the root directory of the project. Add your Groq API key to this file:
+Create a file named .env in the root directory of the project. Add your API keys and Google OAuth credentials:
 
+```ini
+GROQ_API_KEY=your_actual_groq_api_key_here
+SECRET_KEY=generate_a_secure_random_key_here
+GOOGLE_CLIENT_ID=your-google-client-id.apps.googleusercontent.com
+GOOGLE_CLIENT_SECRET=your-google-client-secret
+OWNER_EMAIL=your-email@gmail.com  # Optional: first signed-in Google account becomes Owner
+GROQ_VISION_MODEL=qwen/qwen3.8-27b    # Optional: must accept images
+GROQ_CHAT_MODEL=openai/gpt-oss-120b   # Optional
+ALLOW_DEV_LOGIN=false             # Set to true to sign in as the owner from 127.0.0.1 without Google
+FLASK_DEBUG=false                 # Set to true for auto-reload and the debugger (local only)
 ```
-Code snippet
-GROQ_API_KEY=your_actual_api_key_here
-```
+
+See `.env.example` for all options. If `SECRET_KEY` is missing, a random key is used and everyone is signed out whenever the server restarts.
+
+*Note: In Google Cloud Console, set your Authorized Redirect URI to:*  
+`http://127.0.0.1:5000/auth/callback`
 
 ### 5. Run the Application
 Start the Flask development server:
@@ -85,7 +97,7 @@ Start the Flask development server:
 python app.py
 ```
 Open your web browser and navigate to http://127.0.0.1:5000/.
-(Note: The application will automatically generate the inventory.db database and a static/uploads/ folder upon its first run.)
+(Note: The application will automatically generate the inventory.db database and an uploads/ folder upon its first run. Files from older versions stored in static/uploads/ are moved there automatically.)
 
 ### Project Architecture
 * **app.py:** The main Flask server. It routes web traffic, handles API requests from the frontend, and manages file uploads.

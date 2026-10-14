@@ -1,26 +1,40 @@
+import re
+
 from flask import Blueprint, jsonify, request
 
 from chatbot import ask_digital_twin
 from database import clear_chat_messages, get_chat_conversations, get_chat_messages, save_chat_message, search_chat_messages
 
+from .auth import role_required
+
 chat_bp = Blueprint('chat', __name__)
+
+# Number of earlier messages replayed to the model for context
+CHAT_CONTEXT_MESSAGES = 20
+CONVERSATION_ID_PATTERN = re.compile(r'^[A-Za-z0-9_-]{1,64}$')
 
 
 @chat_bp.route('/api/chat', methods=['POST'])
 def chat():
     data = request.json or {}
-    user_message = data.get('message')
-    history = data.get('history', [])
+    user_message = str(data.get('message') or '').strip()
     conversation_id = data.get('conversation_id', 'legacy')
 
-    if user_message:
-        save_chat_message('user', user_message, conversation_id=conversation_id)
+    if not user_message:
+        return jsonify({'error': 'message is required'}), 400
+    if not CONVERSATION_ID_PATTERN.match(str(conversation_id)):
+        return jsonify({'error': 'Invalid conversation id'}), 400
+
+    # History comes from the database, not the client, so it cannot be tampered with.
+    history = get_chat_messages(conversation_id=conversation_id, limit=CHAT_CONTEXT_MESSAGES)
+    save_chat_message('user', user_message, conversation_id=conversation_id)
 
     result = ask_digital_twin(user_message, history)
 
     if isinstance(result, dict):
         assistant_reply = result.get('reply', '')
-        if assistant_reply:
+        # Failed replies are shown to the user but not stored as part of the conversation.
+        if assistant_reply and not result.get('error'):
             save_chat_message('assistant', assistant_reply, conversation_id=conversation_id)
         return jsonify({
             'reply': assistant_reply,
@@ -63,6 +77,7 @@ def chat_conversation_messages(conversation_id):
 
 
 @chat_bp.route('/api/chat/history', methods=['DELETE'])
+@role_required('owner', 'admin')
 def clear_chat_history():
     clear_chat_messages()
     return jsonify({'message': 'Chat history cleared successfully'})

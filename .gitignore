@@ -3,7 +3,9 @@
 
 # Ignore your personal database and uploads (don't upload your real receipts!)
 inventory.db
+inventory.db-*
 static/uploads/
+uploads/
 temp_*/
 
 # Ignore Python cache files

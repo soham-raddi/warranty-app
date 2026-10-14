@@ -1,19 +1,61 @@
 import os
+import uuid
 
-from flask import Blueprint, current_app, jsonify, request
+from flask import Blueprint, abort, current_app, jsonify, request, send_file
 from werkzeug.utils import secure_filename
 
 from database import (
     add_service_history_entry,
     delete_appliance,
+    find_duplicate_receipt,
+    get_appliance_file_paths,
     get_inventory_analytics,
     get_service_history,
     save_receipt_to_db,
     update_warranty_card,
 )
 from llm_extractor import parse_receipt_image_to_json
+from .auth import role_required
 
 receipts_bp = Blueprint('receipts', __name__)
+
+ALLOWED_EXTENSIONS = {'jpg', 'jpeg', 'png', 'webp', 'pdf'}
+
+
+def _file_extension(filename):
+    return filename.rsplit('.', 1)[-1].lower() if '.' in filename else ''
+
+
+def _validate_upload(file):
+    """Returns an error message for unsupported uploads, or None if the file is acceptable."""
+    if not file or file.filename == '':
+        return 'No selected file'
+    if _file_extension(file.filename) not in ALLOWED_EXTENSIONS:
+        return 'Unsupported file type. Upload a JPG, PNG, WEBP or PDF file.'
+    return None
+
+
+def _save_upload(file, folder):
+    """Saves an upload under a unique name so files with the same original name never collide."""
+    os.makedirs(folder, exist_ok=True)
+    extension = _file_extension(file.filename)
+    base_name = secure_filename(file.filename.rsplit('.', 1)[0])[:80] or 'upload'
+    filepath = os.path.join(folder, f"{uuid.uuid4().hex[:12]}_{base_name}.{extension}")
+    file.save(filepath)
+    return filepath
+
+
+def _serve_upload(path):
+    """Sends a stored upload, refusing anything outside the uploads folder."""
+    if not path:
+        abort(404)
+    upload_root = os.path.realpath(current_app.config['UPLOAD_FOLDER'])
+    real_path = os.path.realpath(path)
+    if os.path.commonpath([upload_root, real_path]) != upload_root or not os.path.isfile(real_path):
+        abort(404)
+    # Anything that is not a known receipt format is forced to download instead of rendering.
+    as_attachment = _file_extension(real_path) not in ALLOWED_EXTENSIONS
+    return send_file(real_path, as_attachment=as_attachment)
 
 
 @receipts_bp.route('/upload', methods=['POST'])
@@ -22,15 +64,11 @@ def upload_file():
         return jsonify({"error": "No file uploaded"}), 400
 
     file = request.files['receipt_image']
-    if file.filename == '':
-        return jsonify({"error": "No selected file"}), 400
+    error = _validate_upload(file)
+    if error:
+        return jsonify({"error": error}), 400
 
-    upload_folder = current_app.config['UPLOAD_FOLDER']
-    os.makedirs(upload_folder, exist_ok=True)
-
-    filename = secure_filename(file.filename)
-    filepath = os.path.join(upload_folder, filename)
-    file.save(filepath)
+    filepath = _save_upload(file, current_app.config['UPLOAD_FOLDER'])
 
     extracted_data = parse_receipt_image_to_json(filepath)
 
@@ -38,11 +76,22 @@ def upload_file():
         os.remove(filepath)
         return jsonify({"error": extracted_data["error"]}), 400
 
+    duplicate_id = find_duplicate_receipt(
+        extracted_data.get('invoice_number'), extracted_data.get('store_name'), extracted_data.get('item_name')
+    )
+    if duplicate_id:
+        os.remove(filepath)
+        return jsonify({
+            "error": f"This receipt is already in your inventory (invoice {extracted_data.get('invoice_number')}).",
+            "duplicate_item_id": duplicate_id
+        }), 409
+
     extracted_data['file_path'] = filepath
     success = save_receipt_to_db(extracted_data)
 
     if success:
         return jsonify(extracted_data)
+    os.remove(filepath)
     return jsonify({"error": "Database save failed"}), 500
 
 
@@ -58,7 +107,20 @@ def get_inventory():
     })
 
 
+@receipts_bp.route('/files/receipt/<int:item_id>')
+def receipt_file(item_id):
+    file_path, _ = get_appliance_file_paths(item_id)
+    return _serve_upload(file_path)
+
+
+@receipts_bp.route('/files/warranty-card/<int:item_id>')
+def warranty_card_file(item_id):
+    _, warranty_card_path = get_appliance_file_paths(item_id)
+    return _serve_upload(warranty_card_path)
+
+
 @receipts_bp.route('/api/delete/<int:item_id>', methods=['DELETE'])
+@role_required('owner', 'admin')
 def delete_item(item_id):
     file_path, warranty_card_path = delete_appliance(item_id)
     if file_path and os.path.exists(file_path):
@@ -74,22 +136,22 @@ def attach_warranty_card(item_id):
         return jsonify({"error": "No warranty card file uploaded"}), 400
 
     file = request.files['warranty_card']
-    if file.filename == '':
-        return jsonify({"error": "No selected warranty card file"}), 400
+    error = _validate_upload(file)
+    if error:
+        return jsonify({"error": error}), 400
 
-    upload_folder = current_app.config['WARRANTY_UPLOAD_FOLDER']
-    os.makedirs(upload_folder, exist_ok=True)
-
-    filename = secure_filename(file.filename)
-    filename = f"{item_id}_{filename}"
-    filepath = os.path.join(upload_folder, filename)
-    file.save(filepath)
+    _, previous_card_path = get_appliance_file_paths(item_id)
+    filepath = _save_upload(file, current_app.config['WARRANTY_UPLOAD_FOLDER'])
 
     success = update_warranty_card(item_id, filepath)
     if not success:
         if os.path.exists(filepath):
             os.remove(filepath)
         return jsonify({"error": "Inventory item not found"}), 404
+
+    # Replacing a card should not leave the old file behind
+    if previous_card_path and previous_card_path != filepath and os.path.exists(previous_card_path):
+        os.remove(previous_card_path)
 
     return jsonify({
         "message": "Warranty card attached successfully",
