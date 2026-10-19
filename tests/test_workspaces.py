@@ -651,5 +651,20 @@ class ZDataAndSecurityTests(unittest.TestCase):
         self.assertEqual(client.get('/inventory').status_code, 302, 'app pages still need sign-in')
 
 
+    def test_hosted_site_never_asks_families_for_mail_server_details(self):
+        import routes.settings as settings_routes
+        owner = new_family('mailless@example.com', 'Mailless Family')
+        app_module.EMAIL_REMINDERS_AVAILABLE = settings_routes.EMAIL_REMINDERS_AVAILABLE = False
+        try:
+            page = owner.get('/settings').get_data(as_text=True)
+            self.assertNotIn('SMTP', page)
+            self.assertNotIn('settingsReminderRecipients', page)
+            self.assertIn("Email reminders aren't available yet", page)
+            self.assertEqual(owner.post('/api/reminders/send').status_code, 404)
+        finally:
+            app_module.EMAIL_REMINDERS_AVAILABLE = settings_routes.EMAIL_REMINDERS_AVAILABLE = True
+        self.assertIn('SMTP', owner.get('/settings').get_data(as_text=True), 'still available locally')
+
+
 if __name__ == '__main__':
     unittest.main(verbosity=2)

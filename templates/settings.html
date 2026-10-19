@@ -22,12 +22,14 @@
             </button>
             <button class="settings-tab" id="tab-alerts-btn" data-bs-toggle="pill" data-bs-target="#tab-alerts" data-tab="alerts" type="button" role="tab" aria-controls="tab-alerts" aria-selected="false">
                 <i class="bi bi-bell"></i>
-                <span><strong>Alerts & reminders</strong><small>Expiry warnings, emails</small></span>
+                <span><strong>Alerts & reminders</strong><small>{{ 'Expiry warnings, emails' if email_reminders_available else 'Expiry warnings' }}</small></span>
             </button>
+            {% if email_reminders_available %}
             <button class="settings-tab" id="tab-email-btn" data-bs-toggle="pill" data-bs-target="#tab-email" data-tab="email" type="button" role="tab" aria-controls="tab-email" aria-selected="false">
                 <i class="bi bi-envelope-at"></i>
                 <span><strong>Email delivery</strong><small>SMTP server details</small></span>
             </button>
+            {% endif %}
             <button class="settings-tab" id="tab-workspace-btn" data-bs-toggle="pill" data-bs-target="#tab-workspace" data-tab="workspace" type="button" role="tab" aria-controls="tab-workspace" aria-selected="false">
                 <i class="bi bi-people"></i>
                 <span><strong>Workspace & members</strong><small>Name, people, invites</small></span>
@@ -188,7 +190,7 @@
                     <fieldset class="settings-pane" data-settings-pane {% if not can_edit %}disabled{% endif %}>
                         <header class="settings-pane-header">
                             <h2 class="settings-pane-title">Alerts & reminders</h2>
-                            <p class="settings-group-note mb-0">When items show up under Needs Attention, and who gets warranty expiry emails.</p>
+                            <p class="settings-group-note mb-0">When items show up under Needs Attention{{ ', and who gets warranty expiry emails' if email_reminders_available }}.</p>
                         </header>
 
                         <div class="settings-group">
@@ -202,6 +204,7 @@
                             </div>
                         </div>
 
+                        {% if email_reminders_available %}
                         <div class="settings-group">
                             <h3 class="settings-group-title mb-3">Reminder emails</h3>
                             <div class="row g-3">
@@ -241,11 +244,15 @@
                             </div>
                             {% endif %}
                         </div>
+                        {% else %}
+                        <p class="small text-muted mb-0"><i class="bi bi-info-circle me-1"></i>Email reminders aren't available yet. Warranties that are about to expire show up on your dashboard under Needs Attention.</p>
+                        {% endif %}
                     </fieldset>
                 </div>
             </section>
 
             <!-- Email delivery -->
+            {% if email_reminders_available %}
             <section class="tab-pane fade" id="tab-email" role="tabpanel" aria-labelledby="tab-email-btn" tabindex="0">
                 <div class="card section-card shadow-sm">
                     <fieldset class="settings-pane" data-settings-pane {% if not can_edit %}disabled{% endif %}>
@@ -281,6 +288,8 @@
                     </fieldset>
                 </div>
             </section>
+
+            {% endif %}
 
             <!-- Workspace & members -->
             <section class="tab-pane fade" id="tab-workspace" role="tabpanel" aria-labelledby="tab-workspace-btn" tabindex="0">

@@ -16,7 +16,7 @@ from datetime import timedelta
 from flask import Flask, g, jsonify, redirect, request, send_from_directory, session, url_for
 from werkzeug.middleware.proxy_fix import ProxyFix
 
-from config import IS_PRODUCTION, MAX_UPLOAD_BYTES
+from config import EMAIL_REMINDERS_AVAILABLE, IS_PRODUCTION, MAX_UPLOAD_BYTES
 from database import (
     accept_pending_invites,
     end_request,
@@ -254,6 +254,7 @@ def inject_current_user():
         'current_role': g.get('role'),
         'my_workspaces': get_user_workspaces(user['id']) if user else [],
         'max_upload_bytes': MAX_UPLOAD_BYTES,
+        'email_reminders_available': EMAIL_REMINDERS_AVAILABLE,
         'ui': ui,
     }
 

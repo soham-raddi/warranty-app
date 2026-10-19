@@ -4,6 +4,7 @@ from email.message import EmailMessage
 
 from flask import Blueprint, g, jsonify, request
 
+from config import EMAIL_REMINDERS_AVAILABLE
 from database import CURRENCY_SYMBOLS, get_all_settings, get_inventory_analytics, set_setting_value
 from .auth import role_required
 
@@ -144,6 +145,8 @@ def update_settings():
 @settings_bp.route('/api/reminders/send', methods=['POST'])
 @role_required('owner', 'admin')
 def send_reminders_now():
+    if not EMAIL_REMINDERS_AVAILABLE:
+        return jsonify({'error': "Email reminders aren't available on this site yet."}), 404
     settings = get_all_settings(g.workspace_id)
     items, _, _, _ = get_inventory_analytics(g.workspace_id)
 
