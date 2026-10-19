@@ -198,88 +198,8 @@ function applyUserPreferences() {
     document.documentElement.style.colorScheme = resolvedTheme === 'dark' ? 'dark' : 'light';
 }
 
-function formatDateValue(value) {
-    const raw = String(value || '').trim();
-    if (!raw) return '';
-    const normalized = raw.includes('T') ? raw : raw.replace(' ', 'T');
-    const asUtc = /Z$|[+-]\d{2}:\d{2}$/.test(normalized) ? normalized : `${normalized}Z`;
-    const dt = new Date(asUtc);
-    if (isNaN(dt.getTime())) return raw;
-
-    try {
-        const timeZone = appSettings.timezone || 'UTC';
-        const format = appSettings.date_format || 'auto';
-        if (format === 'iso') {
-            return dt.toLocaleDateString('sv-SE', { timeZone });
-        }
-        if (format === 'dmy') {
-            return dt.toLocaleDateString([], { day: '2-digit', month: '2-digit', year: 'numeric', timeZone });
-        }
-        if (format === 'mdy') {
-            return dt.toLocaleDateString([], { month: '2-digit', day: '2-digit', year: 'numeric', timeZone });
-        }
-        if (format === 'long') {
-            return dt.toLocaleDateString([], { weekday: 'short', month: 'short', day: '2-digit', year: 'numeric', timeZone });
-        }
-        return dt.toLocaleDateString([], { month: 'short', day: '2-digit', year: 'numeric', timeZone });
-    } catch (e) {
-        return dt.toISOString().slice(0, 10);
-    }
-}
-
-function formatDateTimeValue(value) {
-    const raw = String(value || '').trim();
-    if (!raw) return '';
-    const normalized = raw.includes('T') ? raw : raw.replace(' ', 'T');
-    const asUtc = /Z$|[+-]\d{2}:\d{2}$/.test(normalized) ? normalized : `${normalized}Z`;
-    const dt = new Date(asUtc);
-    if (isNaN(dt.getTime())) return raw;
-
-    try {
-        return dt.toLocaleDateString([], {
-            year: 'numeric',
-            month: 'short',
-            day: '2-digit',
-            hour: '2-digit',
-            minute: '2-digit',
-            hour12: (appSettings.time_format || '12h') !== '24h',
-            timeZone: appSettings.timezone || 'UTC'
-        });
-    } catch (e) {
-        return raw;
-    }
-}
-
 function getCurrencyOption(currencyCode) {
     return CURRENCY_RATES[String(currencyCode || '').toUpperCase()] || CURRENCY_RATES.INR;
-}
-
-function parseReminderRecipients(value) {
-    return String(value || '')
-        .replace(/;/g, ',')
-        .split(',')
-        .map(entry => entry.trim())
-        .filter(Boolean);
-}
-
-function formatTimeValue(value) {
-    const raw = String(value || '').trim();
-    if (!raw) return '';
-    const normalized = raw.includes('T') ? raw : raw.replace(' ', 'T');
-    const asUtc = /Z$|[+-]\d{2}:\d{2}$/.test(normalized) ? normalized : `${normalized}Z`;
-    const dt = new Date(asUtc);
-    if (isNaN(dt.getTime())) return '';
-
-    try {
-        return dt.toLocaleTimeString([], {
-            hour: '2-digit',
-            minute: '2-digit',
-            hour12: (appSettings.time_format || '12h') !== '24h',
-            timeZone: appSettings.timezone || 'UTC'
-        });
-    } catch (e) {
-        return dt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    }
 }
 
 function generateConversationId() {

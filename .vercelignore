@@ -11,4 +11,3 @@ venv/
 __pycache__/
 tests/
 scripts/
-ocr.py
