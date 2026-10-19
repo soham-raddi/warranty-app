@@ -7,14 +7,16 @@ handed out through short-lived signed links.
 Stored file references look like 'uploads/12/abc_receipt.jpg' (local) or 'supabase:12/abc_receipt.jpg'.
 """
 import mimetypes
+import re
 import os
 from urllib.parse import quote
 
 import requests
 from flask import abort, redirect, send_file
 
-SUPABASE_URL = os.getenv('SUPABASE_URL', '').strip().rstrip('/')
-SUPABASE_KEY = os.getenv('SUPABASE_SERVICE_ROLE_KEY', '').strip()
+# Accept the URL as copied from the dashboard, e.g. with a trailing "/rest/v1/" or stray quotes.
+SUPABASE_URL = re.sub(r'/rest/v1/?$', '', os.getenv('SUPABASE_URL', '').strip().strip('"\'').rstrip('/')).rstrip('/')
+SUPABASE_KEY = os.getenv('SUPABASE_SERVICE_ROLE_KEY', '').strip().strip('"\'')
 SUPABASE_BUCKET = os.getenv('SUPABASE_BUCKET', 'receipts').strip() or 'receipts'
 USE_SUPABASE = bool(SUPABASE_URL and SUPABASE_KEY)
 
@@ -29,7 +31,11 @@ class StorageError(Exception):
 
 
 def _headers(extra=None):
-    headers = {'Authorization': f'Bearer {SUPABASE_KEY}', 'apikey': SUPABASE_KEY}
+    headers = {'apikey': SUPABASE_KEY}
+    if not SUPABASE_KEY.startswith('sb_'):
+        # Legacy service_role keys are JWTs and also go in Authorization. New "sb_secret_..." keys are not
+        # JWTs and must only be sent as apikey (Supabase rejects them in the Authorization header).
+        headers['Authorization'] = f'Bearer {SUPABASE_KEY}'
     headers.update(extra or {})
     return headers
 
