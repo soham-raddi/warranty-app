@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ 'Privacy Policy' if page == 'privacy' else 'Terms of Use' }} | Digital Twin</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.5/font/bootstrap-icons.css">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/index.css') }}">
+    <style>
+        .login-wrapper {
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 1.5rem;
+            background: linear-gradient(135deg, rgba(15, 23, 42, 0.04) 0%, rgba(59, 130, 246, 0.06) 100%);
+        }
+        .login-card {
+            width: 100%;
+            max-width: 440px;
+            background: #ffffff;
+            border-radius: 1rem;
+            box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.08), 0 8px 10px -6px rgba(0, 0, 0, 0.04);
+            border: 1px solid rgba(226, 232, 240, 0.9);
+            overflow: hidden;
+        }
+        .login-header {
+            padding: 2.25rem 2rem 1.5rem;
+            text-align: center;
+            border-bottom: 1px solid #f1f5f9;
+        }
+        .login-logo {
+            width: 54px;
+            height: 54px;
+            border-radius: 12px;
+            background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%);
+            color: #ffffff;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.75rem;
+            margin-bottom: 1rem;
+            box-shadow: 0 4px 12px rgba(37, 99, 235, 0.25);
+        }
+        .login-features {
+            color: #475569;
+            font-size: 0.82rem;
+            list-style: none;
+            margin: 1rem 0 0;
+            padding: 0;
+            text-align: left;
+        }
+        .login-features li { display: flex; gap: 0.5rem; margin-top: 0.35rem; }
+        .login-features i { color: #2563eb; }
+        .login-legal { color: #64748b; font-size: 0.75rem; margin: 1rem 0 0; text-align: center; }
+        .login-body {
+            padding: 2rem;
+        }
+        .google-btn {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 12px;
+            width: 100%;
+            padding: 0.75rem 1rem;
+            font-size: 0.95rem;
+            font-weight: 500;
+            color: #1f2937;
+            background-color: #ffffff;
+            border: 1px solid #d1d5db;
+            border-radius: 0.5rem;
+            transition: all 0.2s ease-in-out;
+            text-decoration: none;
+            box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+        }
+        .google-btn:hover {
+            background-color: #f9fafb;
+            border-color: #9ca3af;
+            color: #111827;
+            box-shadow: 0 2px 4px 0 rgba(0, 0, 0, 0.08);
+        }
+        .google-icon {
+            width: 20px;
+            height: 20px;
+        }
+        .workspace-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 0.35rem 0.75rem;
+            border-radius: 9999px;
+            font-size: 0.78rem;
+            font-weight: 500;
+            background: #eff6ff;
+            color: #1d4ed8;
+            margin-top: 0.5rem;
+        }
+        .setup-note {
+            background-color: #f8fafc;
+            border: 1px dashed #cbd5e1;
+            border-radius: 0.5rem;
+            padding: 0.85rem;
+            font-size: 0.82rem;
+            color: #475569;
+        }
+    </style>
+    <style>
+        .legal-card { max-width: 760px; margin: 2rem auto; background: #fff; border-radius: 18px; padding: 2rem;
+                      box-shadow: 0 12px 28px rgba(15, 23, 42, 0.08); line-height: 1.6; }
+        .legal-card h1 { font-size: 1.6rem; font-weight: 800; }
+        .legal-card h2 { font-size: 1.05rem; font-weight: 700; margin-top: 1.5rem; }
+        .legal-card p, .legal-card li { color: #334155; font-size: 0.95rem; }
+    </style>
+</head>
+<body>
+    <main class="legal-card">
+        <a href="{{ url_for('auth.login_page') }}" class="small">&larr; Back to Digital Twin</a>
+        {% if page == 'privacy' %}
+        <h1 class="mt-3">Privacy Policy</h1>
+        <p class="text-muted small">Last updated: {{ '2026-10-19' }}</p>
+
+        <h2>What Digital Twin stores</h2>
+        <ul>
+            <li>Your Google account name, email address and profile picture, used to sign you in.</li>
+            <li>The receipts, warranty cards and item details you or your family upload, and any service history you add.</li>
+            <li>Your workspace settings, membership and invite records, and the messages you send to the assistant.</li>
+        </ul>
+
+        <h2>How it is used</h2>
+        <p>Your data is used only to provide the app: showing your inventory, working out warranty dates and answering
+           your questions. It is never sold or used for advertising.</p>
+
+        <h2>Who can see it</h2>
+        <p>Items, receipts and settings in a workspace are visible only to that workspace's members. Your assistant
+           chats are visible only to you.</p>
+
+        <h2>Services we rely on</h2>
+        <ul>
+            <li><strong>Google</strong> for sign-in.</li>
+            <li><strong>Groq</strong>: receipt images are sent to Groq's AI service to read their details, and your
+                inventory and questions are sent when you use the assistant.</li>
+            <li><strong>Supabase</strong> stores the database and uploaded files; <strong>Vercel</strong> hosts the app.</li>
+        </ul>
+
+        <h2>Keeping or deleting your data</h2>
+        <p>You can export a workspace's inventory as CSV, and delete a workspace or your whole account at any time from
+           Settings &rarr; Workspace &amp; members. Deleting removes the related items, files and chats.</p>
+
+        <h2>Contact</h2>
+        <p>{% if contact_email %}Questions? Email <a href="mailto:{{ contact_email }}">{{ contact_email }}</a>.{% else %}Contact the person who runs this site.{% endif %}</p>
+        {% else %}
+        <h1 class="mt-3">Terms of Use</h1>
+        <p class="text-muted small">Last updated: {{ '2026-10-19' }}</p>
+
+        <h2>Using Digital Twin</h2>
+        <p>Digital Twin helps you keep track of purchases, receipts and warranties. Use it only for documents you are
+           allowed to share, and keep your Google account secure.</p>
+
+        <h2>AI-read details</h2>
+        <p>Receipt details and warranty dates are read automatically and can be wrong. Check important details
+           (such as warranty end dates) against the original documents before relying on them.</p>
+
+        <h2>Fair use</h2>
+        <p>Limits apply to receipt scans, assistant messages and uploads to keep the service available for everyone.
+           Accounts used for abuse may be removed.</p>
+
+        <h2>No warranty for the app itself</h2>
+        <p>The app is provided as-is, without guarantees of availability. Keep your own copies of important documents.</p>
+
+        <h2>Contact</h2>
+        <p>{% if contact_email %}Questions? Email <a href="mailto:{{ contact_email }}">{{ contact_email }}</a>.{% else %}Contact the person who runs this site.{% endif %}</p>
+        {% endif %}
+    </main>
+</body>
+</html>

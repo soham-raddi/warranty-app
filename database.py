@@ -6,16 +6,62 @@ import sqlite3
 import threading
 from datetime import datetime, timedelta
 
+# DATABASE_URL (Postgres, e.g. Supabase) is used when set; otherwise a local SQLite file, for development.
+DATABASE_URL = os.getenv('DATABASE_URL', '').strip()
+IS_POSTGRES = DATABASE_URL.startswith(('postgres://', 'postgresql://'))
 DB_PATH = os.getenv('DATABASE_PATH', 'inventory.db')
 _local = threading.local()
+
+if IS_POSTGRES:
+    import psycopg
+
+    DatabaseError = psycopg.Error
+else:
+    DatabaseError = sqlite3.Error
+
+
+def _to_postgres(sql):
+    """Translates the SQLite-flavoured SQL used in this module into Postgres."""
+    sql = sql.replace('?', '%s').replace(' LIKE ', ' ILIKE ')
+    if sql.lstrip().upper().startswith('INSERT OR IGNORE INTO'):
+        sql = re.sub(r'INSERT OR IGNORE INTO', 'INSERT INTO', sql, count=1, flags=re.IGNORECASE)
+        sql = sql.rstrip().rstrip(';') + ' ON CONFLICT DO NOTHING'
+    return sql
+
+
+class _Cursor:
+    """A cursor that accepts this module's SQL on both SQLite and Postgres."""
+
+    def __init__(self, raw):
+        self._raw = raw
+
+    def execute(self, sql, params=()):
+        if IS_POSTGRES:
+            sql = _to_postgres(sql)
+        self._raw.execute(sql, tuple(params))
+        return self
+
+    def __getattr__(self, name):
+        if name == 'lastrowid' and IS_POSTGRES:
+            raise AttributeError('Use insert_returning_id() instead of cursor.lastrowid')
+        return getattr(self._raw, name)
+
+
+def _open_connection():
+    if IS_POSTGRES:
+        # prepare_threshold=None: Supabase's connection pooler (transaction mode) can't use prepared statements.
+        return psycopg.connect(DATABASE_URL, prepare_threshold=None, connect_timeout=10)
+    return sqlite3.connect(DB_PATH, timeout=10)
 
 
 def _thread_connection():
     """Each server thread gets its own connection, so concurrent requests never share a cursor."""
-    if getattr(_local, 'conn', None) is None:
-        _local.conn = sqlite3.connect(DB_PATH, timeout=10)
-        _local.cursor = _local.conn.cursor()
-    return _local.conn
+    conn_obj = getattr(_local, 'conn', None)
+    if conn_obj is None or (IS_POSTGRES and conn_obj.closed):
+        conn_obj = _open_connection()
+        _local.conn = conn_obj
+        _local.cursor = _Cursor(conn_obj.cursor())
+    return conn_obj
 
 
 class _ThreadLocalProxy:
@@ -32,8 +78,31 @@ class _ThreadLocalProxy:
 conn = _ThreadLocalProxy('conn')
 cursor = _ThreadLocalProxy('cursor')
 
-# WAL lets readers proceed while another request is writing.
-_thread_connection().execute('PRAGMA journal_mode=WAL')
+
+def end_request():
+    """Called after every request: ends any open transaction so pooled Postgres connections are released."""
+    conn_obj = getattr(_local, 'conn', None)
+    if conn_obj is None:
+        return
+    try:
+        conn_obj.rollback()  # writes are committed explicitly; this only closes read transactions
+    except DatabaseError:
+        # A broken connection is replaced on the next request.
+        try:
+            conn_obj.close()
+        except DatabaseError:
+            pass
+        _local.conn = None
+
+
+def insert_returning_id(sql, params=()):
+    """Runs an INSERT and returns the new row's id on either database."""
+    if IS_POSTGRES:
+        cursor.execute(sql.rstrip().rstrip(';') + ' RETURNING id', params)
+        return cursor.fetchone()[0]
+    cursor.execute(sql, params)
+    return cursor.lastrowid
+
 
 # Display symbol for each supported currency; the symbol is always derived from the code.
 CURRENCY_SYMBOLS = {
@@ -68,157 +137,200 @@ WORKSPACE_ROLES = ('owner', 'admin', 'member')
 INVITE_LIFETIME_DAYS = 7
 
 
-def _add_column(table, column_sql):
+# ---------------------------------------------------------------------------
+# Schema
+# ---------------------------------------------------------------------------
+
+def _schema_statements():
+    """CREATE statements for the current schema. Timestamps are stored as UTC text on both databases."""
+    if IS_POSTGRES:
+        pk = 'SERIAL PRIMARY KEY'
+        now = "TO_CHAR(NOW() AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS')"
+    else:
+        pk = 'INTEGER PRIMARY KEY AUTOINCREMENT'
+        now = 'CURRENT_TIMESTAMP'
+    return [
+        f'''CREATE TABLE IF NOT EXISTS appliances_v5 (
+            id {pk},
+            item_name TEXT, brand TEXT, model_number TEXT, serial_number TEXT,
+            category TEXT, date_of_purchase TEXT, price TEXT, tax_amount TEXT,
+            total_amount TEXT, payment_method TEXT, store_name TEXT,
+            store_contact TEXT, warranty_info TEXT, return_policy TEXT,
+            invoice_number TEXT, file_path TEXT,
+            has_warranty_card INTEGER DEFAULT 0,
+            warranty_card_path TEXT,
+            workspace_id INTEGER,
+            warranty_months INTEGER
+        )''',
+        f'''CREATE TABLE IF NOT EXISTS chat_messages (
+            id {pk},
+            conversation_id TEXT NOT NULL DEFAULT '',
+            role TEXT NOT NULL,
+            content TEXT NOT NULL,
+            created_at TEXT NOT NULL DEFAULT ({now}),
+            workspace_id INTEGER,
+            user_id INTEGER
+        )''',
+        f'''CREATE TABLE IF NOT EXISTS service_history (
+            id {pk},
+            item_id INTEGER NOT NULL,
+            service_date TEXT NOT NULL,
+            service_type TEXT NOT NULL,
+            vendor TEXT,
+            cost TEXT,
+            notes TEXT,
+            next_service_date TEXT,
+            created_at TEXT NOT NULL DEFAULT ({now})
+        )''',
+        # Settings from before workspaces existed; kept so older versions of the app still work.
+        '''CREATE TABLE IF NOT EXISTS app_settings (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        )''',
+        f'''CREATE TABLE IF NOT EXISTS users (
+            id {pk},
+            google_id TEXT UNIQUE,
+            email TEXT UNIQUE NOT NULL,
+            name TEXT,
+            picture TEXT,
+            role TEXT NOT NULL DEFAULT 'owner',
+            is_active INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL DEFAULT ({now}),
+            last_login TEXT NOT NULL DEFAULT ({now})
+        )''',
+        # A workspace is one family's private space: its own items, settings, members and chats.
+        f'''CREATE TABLE IF NOT EXISTS workspaces (
+            id {pk},
+            name TEXT NOT NULL,
+            created_by INTEGER,
+            created_at TEXT NOT NULL DEFAULT ({now})
+        )''',
+        f'''CREATE TABLE IF NOT EXISTS workspace_members (
+            workspace_id INTEGER NOT NULL,
+            user_id INTEGER NOT NULL,
+            role TEXT NOT NULL DEFAULT 'member',
+            joined_at TEXT NOT NULL DEFAULT ({now}),
+            PRIMARY KEY (workspace_id, user_id)
+        )''',
+        f'''CREATE TABLE IF NOT EXISTS workspace_invites (
+            id {pk},
+            workspace_id INTEGER NOT NULL,
+            email TEXT NOT NULL,
+            role TEXT NOT NULL DEFAULT 'member',
+            invited_by INTEGER,
+            created_at TEXT NOT NULL DEFAULT ({now}),
+            token_hash TEXT,
+            expires_at TEXT,
+            accepted_at TEXT,
+            accepted_by INTEGER,
+            UNIQUE (workspace_id, email)
+        )''',
+        '''CREATE TABLE IF NOT EXISTS workspace_settings (
+            workspace_id INTEGER NOT NULL,
+            key TEXT NOT NULL,
+            value TEXT NOT NULL,
+            PRIMARY KEY (workspace_id, key)
+        )''',
+        # Fixed-window counters for rate limits (shared by every server instance).
+        '''CREATE TABLE IF NOT EXISTS rate_limits (
+            bucket TEXT NOT NULL,
+            window_start INTEGER NOT NULL,
+            hits INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY (bucket, window_start)
+        )''',
+    ]
+
+
+_INDEXES = [
+    'CREATE INDEX IF NOT EXISTS idx_service_history_item_id ON service_history(item_id)',
+    'CREATE INDEX IF NOT EXISTS idx_appliances_workspace ON appliances_v5(workspace_id)',
+    'CREATE INDEX IF NOT EXISTS idx_chat_owner ON chat_messages(workspace_id, user_id, conversation_id)',
+    'CREATE INDEX IF NOT EXISTS idx_members_user ON workspace_members(user_id)',
+    'CREATE INDEX IF NOT EXISTS idx_invites_email ON workspace_invites(email)',
+    'CREATE UNIQUE INDEX IF NOT EXISTS idx_invites_token ON workspace_invites(token_hash) WHERE token_hash IS NOT NULL',
+]
+
+
+def _add_sqlite_column(table, column_sql):
     try:
         cursor.execute(f'ALTER TABLE {table} ADD COLUMN {column_sql}')
     except sqlite3.OperationalError:
         pass  # column already exists
 
 
-# ---------------------------------------------------------------------------
-# Schema
-# ---------------------------------------------------------------------------
+def _upgrade_old_sqlite_install():
+    """Brings SQLite databases created by earlier versions of the app up to the current schema."""
+    for table, column in [
+        ('chat_messages', "conversation_id TEXT NOT NULL DEFAULT ''"),
+        ('appliances_v5', 'has_warranty_card INTEGER DEFAULT 0'),
+        ('appliances_v5', 'warranty_card_path TEXT'),
+        ('appliances_v5', 'workspace_id INTEGER'),
+        ('appliances_v5', 'warranty_months INTEGER'),
+        ('chat_messages', 'workspace_id INTEGER'),
+        ('chat_messages', 'user_id INTEGER'),
+        ('workspace_invites', 'token_hash TEXT'),
+        ('workspace_invites', 'expires_at TEXT'),
+        ('workspace_invites', 'accepted_at TEXT'),
+        ('workspace_invites', 'accepted_by INTEGER'),
+    ]:
+        _add_sqlite_column(table, column)
 
-# Upgraded to v5 to include invoice_number
-cursor.execute('''
-    CREATE TABLE IF NOT EXISTS appliances_v5 (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        item_name TEXT, brand TEXT, model_number TEXT, serial_number TEXT,
-        category TEXT, date_of_purchase TEXT, price TEXT, tax_amount TEXT,
-        total_amount TEXT, payment_method TEXT, store_name TEXT,
-        store_contact TEXT, warranty_info TEXT, return_policy TEXT,
-        invoice_number TEXT, file_path TEXT,
-        has_warranty_card INTEGER DEFAULT 0,
-        warranty_card_path TEXT
-    )
-''')
+    cursor.execute("UPDATE chat_messages SET conversation_id = 'legacy' WHERE conversation_id IS NULL OR conversation_id = ''")
 
-cursor.execute('''
-    CREATE TABLE IF NOT EXISTS chat_messages (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        conversation_id TEXT NOT NULL DEFAULT '',
-        role TEXT NOT NULL,
-        content TEXT NOT NULL,
-        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-    )
-''')
+    # Earlier extractions stored placeholders such as "not found"; store them as empty instead.
+    marks = ', '.join('?' for _ in PLACEHOLDER_VALUES)
+    for column in _TEXT_COLUMNS:
+        cursor.execute(
+            f'UPDATE appliances_v5 SET {column} = NULL WHERE LOWER(TRIM({column})) IN ({marks})',
+            PLACEHOLDER_VALUES
+        )
 
-cursor.execute('''
-    CREATE TABLE IF NOT EXISTS service_history (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        item_id INTEGER NOT NULL,
-        service_date TEXT NOT NULL,
-        service_type TEXT NOT NULL,
-        vendor TEXT,
-        cost TEXT,
-        notes TEXT,
-        next_service_date TEXT,
-        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-    )
-''')
+    # "Has warranty card" means a card file is attached, not that the receipt mentions a warranty.
+    cursor.execute('''
+        UPDATE appliances_v5
+        SET has_warranty_card = CASE WHEN COALESCE(warranty_card_path, '') != '' THEN 1 ELSE 0 END
+    ''')
 
-# Settings from before workspaces existed; kept read-only so older versions of the app still work.
-cursor.execute('''
-    CREATE TABLE IF NOT EXISTS app_settings (
-        key TEXT PRIMARY KEY,
-        value TEXT NOT NULL
-    )
-''')
 
-cursor.execute('''
-    CREATE TABLE IF NOT EXISTS users (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        google_id TEXT UNIQUE,
-        email TEXT UNIQUE NOT NULL,
-        name TEXT,
-        picture TEXT,
-        role TEXT NOT NULL DEFAULT 'owner',
-        is_active INTEGER NOT NULL DEFAULT 1,
-        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-        last_login TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-    )
-''')
-
-# A workspace is one family's private space: its own items, settings, members and chats.
-cursor.execute('''
-    CREATE TABLE IF NOT EXISTS workspaces (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        name TEXT NOT NULL,
-        created_by INTEGER,
-        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-    )
-''')
-
-cursor.execute('''
-    CREATE TABLE IF NOT EXISTS workspace_members (
-        workspace_id INTEGER NOT NULL,
-        user_id INTEGER NOT NULL,
-        role TEXT NOT NULL DEFAULT 'member',
-        joined_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-        PRIMARY KEY (workspace_id, user_id)
-    )
-''')
-
-cursor.execute('''
-    CREATE TABLE IF NOT EXISTS workspace_invites (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        workspace_id INTEGER NOT NULL,
-        email TEXT NOT NULL,
-        role TEXT NOT NULL DEFAULT 'member',
-        invited_by INTEGER,
-        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-        UNIQUE (workspace_id, email)
-    )
-''')
-
-cursor.execute('''
-    CREATE TABLE IF NOT EXISTS workspace_settings (
-        workspace_id INTEGER NOT NULL,
-        key TEXT NOT NULL,
-        value TEXT NOT NULL,
-        PRIMARY KEY (workspace_id, key)
-    )
-''')
-
-_add_column('chat_messages', 'conversation_id TEXT NOT NULL DEFAULT ""')
-_add_column('appliances_v5', 'has_warranty_card INTEGER DEFAULT 0')
-_add_column('appliances_v5', 'warranty_card_path TEXT')
-_add_column('appliances_v5', 'workspace_id INTEGER')
-_add_column('chat_messages', 'workspace_id INTEGER')
-_add_column('chat_messages', 'user_id INTEGER')
-_add_column('workspace_invites', 'token_hash TEXT')
-_add_column('workspace_invites', 'expires_at TEXT')
-_add_column('workspace_invites', 'accepted_at TEXT')
-_add_column('workspace_invites', 'accepted_by INTEGER')
-
-cursor.execute("UPDATE chat_messages SET conversation_id = 'legacy' WHERE conversation_id IS NULL OR conversation_id = ''")
-cursor.execute('CREATE INDEX IF NOT EXISTS idx_service_history_item_id ON service_history(item_id)')
-cursor.execute('CREATE INDEX IF NOT EXISTS idx_appliances_workspace ON appliances_v5(workspace_id)')
-cursor.execute('CREATE INDEX IF NOT EXISTS idx_chat_owner ON chat_messages(workspace_id, user_id, conversation_id)')
-cursor.execute('CREATE INDEX IF NOT EXISTS idx_members_user ON workspace_members(user_id)')
-cursor.execute('CREATE INDEX IF NOT EXISTS idx_invites_email ON workspace_invites(email)')
-cursor.execute('CREATE UNIQUE INDEX IF NOT EXISTS idx_invites_token ON workspace_invites(token_hash) WHERE token_hash IS NOT NULL')
-conn.commit()
-
-# Earlier extractions stored placeholders such as "not found"; store them as empty instead.
 PLACEHOLDER_VALUES = ('', 'n/a', 'na', 'none', 'null', 'unknown', 'not found', 'not available',
                       'not mentioned', 'not specified', 'not specified on receipt', '-')
 _TEXT_COLUMNS = ('item_name', 'brand', 'model_number', 'serial_number', 'category', 'date_of_purchase',
                  'price', 'tax_amount', 'total_amount', 'payment_method', 'store_name', 'store_contact',
                  'warranty_info', 'return_policy', 'invoice_number')
-_placeholder_marks = ', '.join('?' for _ in PLACEHOLDER_VALUES)
-for _column in _TEXT_COLUMNS:
-    cursor.execute(
-        f'UPDATE appliances_v5 SET {_column} = NULL WHERE LOWER(TRIM({_column})) IN ({_placeholder_marks})',
-        PLACEHOLDER_VALUES
-    )
 
-# "Has warranty card" means a card file is attached, not that the receipt mentions a warranty.
-cursor.execute('''
-    UPDATE appliances_v5
-    SET has_warranty_card = CASE WHEN COALESCE(warranty_card_path, '') != '' THEN 1 ELSE 0 END
-''')
-conn.commit()
+
+_ALL_TABLES = ('appliances_v5', 'chat_messages', 'service_history', 'app_settings', 'users', 'workspaces',
+               'workspace_members', 'workspace_invites', 'workspace_settings', 'rate_limits')
+
+
+def _postgres_schema_exists():
+    """One quick query instead of a dozen CREATE statements on every serverless cold start."""
+    cursor.execute(
+        'SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = current_schema() AND table_name IN ({})'
+        .format(', '.join('?' for _ in _ALL_TABLES)),
+        _ALL_TABLES
+    )
+    exists = cursor.fetchone()[0] == len(_ALL_TABLES)
+    conn.rollback()
+    return exists
+
+
+def init_schema():
+    if IS_POSTGRES and _postgres_schema_exists():
+        return
+    if not IS_POSTGRES:
+        # WAL lets readers proceed while another request is writing.
+        _thread_connection().execute('PRAGMA journal_mode=WAL')
+    for statement in _schema_statements():
+        cursor.execute(statement)
+    if not IS_POSTGRES:
+        _upgrade_old_sqlite_install()
+    for statement in _INDEXES:
+        cursor.execute(statement)
+    conn.commit()
+
+
+init_schema()
 
 
 # ---------------------------------------------------------------------------
@@ -271,12 +383,12 @@ def upsert_user(google_id, email, name=None, picture=None):
         conn.commit()
         return get_user_by_id(user['id'])
 
-    cursor.execute('''
+    user_id = insert_returning_id('''
         INSERT INTO users (google_id, email, name, picture, role, is_active, created_at, last_login)
         VALUES (?, ?, ?, ?, 'member', 1, ?, ?)
     ''', (google_id, clean_email, name or clean_email, picture or '', now, now))
     conn.commit()
-    return get_user_by_id(cursor.lastrowid)
+    return get_user_by_id(user_id)
 
 
 # ---------------------------------------------------------------------------
@@ -288,11 +400,10 @@ def create_workspace(name, owner_user_id):
     cursor.execute('SELECT COUNT(*) FROM workspaces')
     is_first_workspace = cursor.fetchone()[0] == 0
 
-    cursor.execute(
+    workspace_id = insert_returning_id(
         'INSERT INTO workspaces (name, created_by, created_at) VALUES (?, ?, ?)',
         (name.strip(), owner_user_id, datetime.now().isoformat())
     )
-    workspace_id = cursor.lastrowid
     cursor.execute(
         "INSERT INTO workspace_members (workspace_id, user_id, role, joined_at) VALUES (?, ?, 'owner', ?)",
         (workspace_id, owner_user_id, datetime.now().isoformat())
@@ -429,12 +540,11 @@ def create_invite(workspace_id, email, role, invited_by):
         )
         invite_id = existing[0]
     else:
-        cursor.execute(
+        invite_id = insert_returning_id(
             '''INSERT INTO workspace_invites (workspace_id, email, role, invited_by, created_at, token_hash, expires_at)
                VALUES (?, ?, ?, ?, ?, ?, ?)''',
             (workspace_id, clean_email, role, invited_by, datetime.now().isoformat(), _hash_token(token), expires_at)
         )
-        invite_id = cursor.lastrowid
     conn.commit()
     return {'id': invite_id, 'email': clean_email, 'role': role, 'token': token, 'expires_at': expires_at}, None
 
@@ -588,18 +698,59 @@ def save_receipt_to_db(workspace_id, data):
             item_name, brand, model_number, serial_number, category, date_of_purchase,
             price, tax_amount, total_amount, payment_method,
             store_name, store_contact, warranty_info, return_policy, invoice_number, file_path,
-            has_warranty_card, warranty_card_path, workspace_id
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            has_warranty_card, warranty_card_path, workspace_id, warranty_months
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ''', (
         data.get("item_name"), data.get("brand"), data.get("model_number"), data.get("serial_number"),
         data.get("category"), data.get("date_of_purchase"), data.get("price"),
         data.get("tax_amount"), data.get("total_amount"), data.get("payment_method"),
         data.get("store_name"), data.get("store_contact"), data.get("warranty_info"),
         data.get("return_policy"), data.get("invoice_number"), data.get("file_path"),
-        has_warranty_card, data.get("warranty_card_path"), workspace_id
+        has_warranty_card, data.get("warranty_card_path"), workspace_id, data.get("warranty_months")
     ))
     conn.commit()
     return True
+
+
+
+def _add_months(start, months):
+    """Same day N calendar months later (clamped to the month's last day, e.g. Jan 31 + 1 month = Feb 28/29)."""
+    month_index = start.month - 1 + int(months)
+    year, month = start.year + month_index // 12, month_index % 12 + 1
+    days_in_month = [31, 29 if year % 4 == 0 and (year % 100 != 0 or year % 400 == 0) else 28,
+                     31, 30, 31, 30, 31, 31, 30, 31, 30, 31][month - 1]
+    return start.replace(year=year, month=month, day=min(start.day, days_in_month))
+
+
+def get_appliance(workspace_id, item_id):
+    cursor.execute('SELECT * FROM appliances_v5 WHERE id = ? AND workspace_id = ?', (item_id, workspace_id))
+    row = cursor.fetchone()
+    if not row:
+        return None
+    item = dict(zip([d[0] for d in cursor.description], row))
+    item.pop('file_path', None)
+    item.pop('warranty_card_path', None)
+    return item
+
+
+_UPDATABLE_COLUMNS = {
+    'item_name', 'brand', 'model_number', 'serial_number', 'category', 'date_of_purchase', 'total_amount',
+    'store_name', 'store_contact', 'invoice_number', 'warranty_info', 'return_policy', 'warranty_months',
+}
+
+
+def update_appliance(workspace_id, item_id, changes):
+    """Applies validated edits to an item in this workspace."""
+    columns = [column for column in changes if column in _UPDATABLE_COLUMNS]
+    if not columns:
+        return False
+    assignments = ', '.join(f'{column} = ?' for column in columns)
+    cursor.execute(
+        f'UPDATE appliances_v5 SET {assignments} WHERE id = ? AND workspace_id = ?',
+        [changes[column] for column in columns] + [item_id, workspace_id]
+    )
+    conn.commit()
+    return cursor.rowcount > 0
 
 
 def find_duplicate_receipt(workspace_id, invoice_number, store_name, item_name):
@@ -736,7 +887,9 @@ def get_inventory_analytics(workspace_id):
             item['days_remaining'] = None
             continue
 
-        expiry_date = p_date + timedelta(days=warranty_period_days)
+        months = item.get('warranty_months')
+        expiry_date = _add_months(p_date, months) if months else p_date + timedelta(days=warranty_period_days)
+        item['warranty_source'] = 'item' if months else 'default'
         days_remaining = (expiry_date.date() - datetime.now().date()).days
         item['warranty_expires_on'] = expiry_date.strftime('%Y-%m-%d')
         item['days_remaining'] = days_remaining
@@ -777,7 +930,7 @@ def get_inventory_analytics(workspace_id):
 
 def add_service_history_entry(item_id, service_date, service_type, vendor='', cost='', notes='', next_service_date=''):
     """Callers must check the item belongs to their workspace first (item_exists)."""
-    cursor.execute(
+    entry_id = insert_returning_id(
         '''
         INSERT INTO service_history (
             item_id, service_date, service_type, vendor, cost, notes, next_service_date
@@ -786,7 +939,7 @@ def add_service_history_entry(item_id, service_date, service_type, vendor='', co
         (item_id, service_date, service_type, vendor, cost, notes, next_service_date)
     )
     conn.commit()
-    return cursor.lastrowid
+    return entry_id
 
 
 def get_service_history(item_id):
@@ -881,10 +1034,17 @@ def search_chat_messages(workspace_id, user_id, query, conversation_id='legacy',
 def get_chat_conversations(workspace_id, user_id, query='', limit=100):
     safe_limit = max(1, min(int(limit), 500))
     query_text = (query or '').strip()
-    like_query = f"%{query_text}%" if query_text else None
+    search_filter = ''
+    params = [workspace_id, user_id]
+    if query_text:
+        search_filter = '''WHERE EXISTS (
+            SELECT 1 FROM mine m3 WHERE m3.conversation_id = c.conversation_id AND m3.content LIKE ?
+        )'''
+        params.append(f"%{query_text}%")
+    params.append(safe_limit)
 
     cursor.execute(
-        '''
+        f'''
         WITH mine AS (
             SELECT * FROM chat_messages WHERE workspace_id = ? AND user_id = ?
         ),
@@ -903,13 +1063,11 @@ def get_chat_conversations(workspace_id, user_id, query='', limit=100):
             (SELECT content FROM mine m2 WHERE m2.conversation_id = c.conversation_id
              ORDER BY m2.id DESC LIMIT 1) AS preview
         FROM conversation_summaries c
-        WHERE (? IS NULL OR EXISTS (
-            SELECT 1 FROM mine m3 WHERE m3.conversation_id = c.conversation_id AND m3.content LIKE ?
-        ))
+        {search_filter}
         ORDER BY c.updated_at DESC
         LIMIT ?
         ''',
-        (workspace_id, user_id, like_query, like_query, safe_limit)
+        params
     )
 
     return [
@@ -967,3 +1125,118 @@ def get_all_settings(workspace_id):
         result[key] = value
     result['currency_symbol'] = CURRENCY_SYMBOLS.get(result.get('currency_code'), result.get('currency_symbol'))
     return result
+
+
+# ---------------------------------------------------------------------------
+# Rate limits (stored in the database so every server instance shares them)
+# ---------------------------------------------------------------------------
+
+def hit_rate_limit(bucket, window_seconds):
+    """Counts one hit for bucket in the current time window and returns the total so far."""
+    window_start = int(datetime.now().timestamp()) // window_seconds * window_seconds
+    cursor.execute(
+        '''
+        INSERT INTO rate_limits (bucket, window_start, hits) VALUES (?, ?, 1)
+        ON CONFLICT (bucket, window_start) DO UPDATE SET hits = rate_limits.hits + 1
+        RETURNING hits
+        ''',
+        (bucket, window_start)
+    )
+    hits = cursor.fetchone()[0]
+    conn.commit()
+    return hits
+
+
+def prune_rate_limits(older_than_seconds=2 * 86400):
+    cutoff = int(datetime.now().timestamp()) - older_than_seconds
+    cursor.execute('DELETE FROM rate_limits WHERE window_start < ?', (cutoff,))
+    conn.commit()
+    return cursor.rowcount
+
+
+def prune_old_invites(days=30):
+    """Removes invites that expired or were used more than `days` ago."""
+    cutoff = (datetime.now() - timedelta(days=days)).isoformat(timespec='seconds')
+    cursor.execute(
+        'DELETE FROM workspace_invites WHERE (expires_at IS NOT NULL AND expires_at < ?) OR (accepted_at IS NOT NULL AND accepted_at < ?)',
+        (cutoff, cutoff)
+    )
+    conn.commit()
+    return cursor.rowcount
+
+
+# ---------------------------------------------------------------------------
+# Ownership, deleting workspaces and accounts, export
+# ---------------------------------------------------------------------------
+
+def transfer_ownership(workspace_id, from_user_id, to_user_id):
+    """Makes another member the owner; the previous owner becomes an admin. Returns an error or None."""
+    if get_membership_role(workspace_id, from_user_id) != 'owner':
+        return 'Only the owner can transfer ownership'
+    if to_user_id == from_user_id:
+        return 'You are already the owner'
+    if not get_membership_role(workspace_id, to_user_id):
+        return 'That person is not a member of this workspace'
+    cursor.execute("UPDATE workspace_members SET role = 'admin' WHERE workspace_id = ? AND user_id = ?",
+                   (workspace_id, from_user_id))
+    cursor.execute("UPDATE workspace_members SET role = 'owner' WHERE workspace_id = ? AND user_id = ?",
+                   (workspace_id, to_user_id))
+    conn.commit()
+    return None
+
+
+def delete_workspace(workspace_id):
+    """Deletes a workspace and everything in it. Returns the stored file references so callers can remove them."""
+    cursor.execute('SELECT id, file_path, warranty_card_path FROM appliances_v5 WHERE workspace_id = ?', (workspace_id,))
+    rows = cursor.fetchall()
+    files = [ref for _id, file_path, card_path in rows for ref in (file_path, card_path) if ref]
+    item_ids = [row[0] for row in rows]
+    if item_ids:
+        marks = ', '.join('?' for _ in item_ids)
+        cursor.execute(f'DELETE FROM service_history WHERE item_id IN ({marks})', item_ids)
+    for table in ('appliances_v5', 'chat_messages', 'workspace_settings', 'workspace_invites', 'workspace_members'):
+        cursor.execute(f'DELETE FROM {table} WHERE workspace_id = ?', (workspace_id,))
+    cursor.execute('DELETE FROM workspaces WHERE id = ?', (workspace_id,))
+    conn.commit()
+    return files
+
+
+def owned_workspaces_with_other_members(user_id):
+    cursor.execute('''
+        SELECT w.id, w.name FROM workspaces w
+        JOIN workspace_members m ON m.workspace_id = w.id AND m.user_id = ? AND m.role = 'owner'
+        WHERE EXISTS (SELECT 1 FROM workspace_members o WHERE o.workspace_id = w.id AND o.user_id != ?)
+    ''', (user_id, user_id))
+    return [{'id': row[0], 'name': row[1]} for row in cursor.fetchall()]
+
+
+def delete_user_account(user_id):
+    """Deletes an account: workspaces they own alone, their memberships, their chats and the user.
+
+    Callers must first make sure the user owns no workspace that other people still use.
+    Returns the stored file references of deleted workspaces.
+    """
+    files = []
+    for workspace in get_user_workspaces(user_id):
+        if workspace['role'] == 'owner':
+            files += delete_workspace(workspace['id'])
+    cursor.execute('DELETE FROM chat_messages WHERE user_id = ?', (user_id,))
+    cursor.execute('DELETE FROM workspace_members WHERE user_id = ?', (user_id,))
+    cursor.execute('UPDATE workspace_invites SET invited_by = NULL WHERE invited_by = ?', (user_id,))
+    cursor.execute('DELETE FROM users WHERE id = ?', (user_id,))
+    conn.commit()
+    return files
+
+
+def export_workspace_rows(workspace_id):
+    """Items and service history of a workspace, for the CSV export."""
+    items, _total, _active, _alerts = get_inventory_analytics(workspace_id)
+    cursor.execute('''
+        SELECT s.item_id, a.item_name, s.service_date, s.service_type, s.vendor, s.cost, s.notes, s.next_service_date
+        FROM service_history s JOIN appliances_v5 a ON a.id = s.item_id
+        WHERE a.workspace_id = ?
+        ORDER BY s.item_id, s.service_date
+    ''', (workspace_id,))
+    history = [dict(zip(['item_id', 'item_name', 'service_date', 'service_type', 'vendor', 'cost', 'notes',
+                         'next_service_date'], row)) for row in cursor.fetchall()]
+    return items, history

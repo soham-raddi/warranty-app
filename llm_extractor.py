@@ -6,10 +6,9 @@ from datetime import datetime
 
 import fitz
 from PIL import Image
-from dotenv import load_dotenv
 from groq import Groq
 
-load_dotenv()
+# .env is loaded once by app.py; this module just reads the environment.
 _client = None
 MISSING_KEY_MESSAGE = "GROQ_API_KEY is not set. Add it to your .env file to enable receipt scanning and the assistant."
 
@@ -41,12 +40,12 @@ MISSING_VALUE_MARKERS = {
 }
 
 
-def encode_image(file_path):
-    """Converts images or MULTI-PAGE PDFs to a list of Base64 strings, compressing large images."""
+def encode_image(data, filename):
+    """Converts image or MULTI-PAGE PDF bytes to a list of Base64 strings, compressing large images."""
     encoded_images = []
 
-    if file_path.lower().endswith('.pdf'):
-        doc = fitz.open(file_path)
+    if filename.lower().endswith('.pdf'):
+        doc = fitz.open(stream=data, filetype='pdf')
         # Process up to the first 3 pages
         for i in range(min(len(doc), 3)):
             page = doc.load_page(i)
@@ -55,7 +54,7 @@ def encode_image(file_path):
             encoded_images.append((base64.b64encode(img_bytes).decode('utf-8'), "image/png"))
         doc.close()
     else:
-        with Image.open(file_path) as img:  #compression logic for large images
+        with Image.open(io.BytesIO(data)) as img:  #compression logic for large images
             if img.mode != 'RGB':
                 img = img.convert('RGB')
 
@@ -91,12 +90,19 @@ def _clean_receipt_data(raw):
             datetime.strptime(data["date_of_purchase"], "%Y-%m-%d")
         except ValueError:
             data["date_of_purchase"] = None
+
+    # Keep a warranty length only if it is a sensible whole number of months (1 month to 30 years).
+    try:
+        months = int(float(raw.get("warranty_months")))
+        data["warranty_months"] = months if 1 <= months <= 360 else None
+    except (TypeError, ValueError):
+        data["warranty_months"] = None
     return data
 
 
-def parse_receipt_image_to_json(file_path):
+def parse_receipt_image_to_json(data, filename):
     try:
-        image_list = encode_image(file_path)
+        image_list = encode_image(data, filename)
     except Exception as e:
         return {"error": f"Failed to read file: {e}"}
 
@@ -109,7 +115,8 @@ def parse_receipt_image_to_json(file_path):
         "category (Use broad categories like 'Electronic Gadgets', 'Kitchen Appliances', 'Apparel', 'Automotive', etc.), "
         "date_of_purchase (YYYY-MM-DD), price, tax_amount, total_amount (the grand total of the entire invoice), payment_method, "
         "store_name (The overall retailer or marketplace name), store_contact, "
-        "invoice_number, warranty_info, return_policy.\n"
+        "invoice_number, warranty_info, return_policy, "
+        "warranty_months (the warranty length as a whole number of months, e.g. 12 for '1 year'; null if not stated).\n"
         "Use null for any field that is not present on the document; never guess or write placeholders like 'not found'.\n"
         "Return ONLY valid JSON. Do not add any conversational text or Markdown formatting."
     )

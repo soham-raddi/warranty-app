@@ -1,14 +1,23 @@
+import csv
+import io
 import os
 import re
 from datetime import datetime
 
-from flask import Blueprint, g, jsonify, redirect, render_template, request, session, url_for
+from flask import Blueprint, Response, g, jsonify, redirect, render_template, request, session, url_for
+
+import storage
 
 from database import (
     accept_invite_token,
     create_invite,
     create_workspace,
     delete_invite,
+    delete_user_account,
+    delete_workspace,
+    export_workspace_rows,
+    owned_workspaces_with_other_members,
+    transfer_ownership,
     get_invite_by_token,
     get_membership_role,
     get_user_workspaces,
@@ -18,6 +27,7 @@ from database import (
     remove_workspace_member,
     rename_workspace,
 )
+from ratelimit import limit
 from .auth import is_dev_login_allowed, is_google_configured, role_required
 
 workspaces_bp = Blueprint('workspaces', __name__)
@@ -80,6 +90,7 @@ def list_my_workspaces():
 
 
 @workspaces_bp.route('/api/workspaces', methods=['POST'])
+@limit('create_workspace', daily=10)
 def create_my_workspace():
     if not new_workspaces_allowed():
         return jsonify({'error': 'New workspaces are disabled on this site. Ask a family owner to invite you.'}), 403
@@ -137,6 +148,7 @@ def workspace_members():
 
 @workspaces_bp.route('/api/workspace/invites', methods=['POST'])
 @role_required('owner', 'admin')
+@limit('invite', per_workspace=True, hourly=30, daily=100)
 def invite_member():
     payload = request.json or {}
     email = str(payload.get('email', '')).strip().lower()
@@ -162,6 +174,7 @@ def invite_member():
 
 @workspaces_bp.route('/api/workspace/invites/<int:invite_id>/link', methods=['POST'])
 @role_required('owner', 'admin')
+@limit('invite', per_workspace=True, hourly=30, daily=100)
 def new_invite_link(invite_id):
     # Only a hash of each link is stored, so a lost link is replaced rather than shown again.
     result = regenerate_invite_token(g.workspace_id, invite_id)
@@ -244,3 +257,80 @@ def accept_invite(token):
 
     session['workspace_id'] = workspace_id
     return redirect(url_for('pages.dashboard_page'))
+
+
+@workspaces_bp.route('/api/workspace/transfer', methods=['POST'])
+@role_required('owner')
+def transfer_workspace():
+    try:
+        new_owner_id = int((request.json or {}).get('user_id'))
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Choose a member to make owner'}), 400
+    error = transfer_ownership(g.workspace_id, g.current_user['id'], new_owner_id)
+    if error:
+        return jsonify({'error': error}), 400
+    return jsonify({'message': 'Ownership transferred. You are now an admin of this workspace.'})
+
+
+@workspaces_bp.route('/api/workspace', methods=['DELETE'])
+@role_required('owner')
+def delete_current_workspace():
+    """Permanently deletes the workspace, its items, receipts, settings, invites and chats."""
+    confirm = str((request.json or {}).get('confirm_name', '')).strip()
+    if confirm != (g.workspace or {}).get('name'):
+        return jsonify({'error': 'Type the workspace name exactly to confirm'}), 400
+    for ref in delete_workspace(g.workspace_id):
+        storage.delete(ref)
+    session.pop('workspace_id', None)
+    remaining = get_user_workspaces(g.current_user['id'])
+    return jsonify({'message': 'Workspace deleted',
+                    'redirect': url_for('pages.dashboard_page') if remaining else url_for('workspaces.welcome_page')})
+
+
+@workspaces_bp.route('/api/workspace/export.csv', methods=['GET'])
+def export_workspace():
+    """Inventory and service history as one CSV file (receipt files stay downloadable from Inventory)."""
+    items, history = export_workspace_rows(g.workspace_id)
+    buffer = io.StringIO()
+    writer = csv.writer(buffer)
+    columns = ['id', 'item_name', 'brand', 'model_number', 'serial_number', 'category', 'date_of_purchase',
+               'total_amount', 'store_name', 'invoice_number', 'warranty_months', 'warranty_expires_on',
+               'warranty_status', 'warranty_info', 'return_policy', 'has_warranty_card']
+    writer.writerow(['Inventory'])
+    writer.writerow(columns)
+    for item in items:
+        writer.writerow([_csv_safe(item.get(column)) for column in columns])
+    writer.writerow([])
+    writer.writerow(['Service history'])
+    history_columns = ['item_id', 'item_name', 'service_date', 'service_type', 'vendor', 'cost', 'notes', 'next_service_date']
+    writer.writerow(history_columns)
+    for entry in history:
+        writer.writerow([_csv_safe(entry.get(column)) for column in history_columns])
+
+    safe_name = re.sub(r'[^A-Za-z0-9_-]+', '-', (g.workspace or {}).get('name', 'workspace')).strip('-') or 'workspace'
+    filename = f"{safe_name}-{datetime.now().strftime('%Y-%m-%d')}.csv"
+    return Response(chr(0xFEFF) + buffer.getvalue(), mimetype='text/csv',
+                    headers={'Content-Disposition': f'attachment; filename="{filename}"'})
+
+
+def _csv_safe(value):
+    """Stops spreadsheet apps treating text from receipts as formulas (CSV injection)."""
+    text = '' if value is None else str(value)
+    return "'" + text if text[:1] in ('=', '+', '-', '@', chr(9), chr(13)) else text
+
+
+@workspaces_bp.route('/api/account', methods=['DELETE'])
+def delete_my_account():
+    """Deletes the signed-in person's account, workspaces they own alone, and their chats."""
+    user = g.current_user
+    if str((request.json or {}).get('confirm_email', '')).strip().lower() != user['email'].lower():
+        return jsonify({'error': 'Type your email address exactly to confirm'}), 400
+    shared = owned_workspaces_with_other_members(user['id'])
+    if shared:
+        names = ', '.join(w['name'] for w in shared)
+        return jsonify({'error': f'You own workspaces other people still use ({names}). '
+                                 'Transfer ownership or delete them first.'}), 400
+    for ref in delete_user_account(user['id']):
+        storage.delete(ref)
+    session.clear()
+    return jsonify({'message': 'Your account has been deleted', 'redirect': url_for('auth.login_page')})

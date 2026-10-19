@@ -1314,3 +1314,29 @@ body[data-theme="dark"] .settings-savebar {
         display: none;
     }
 }
+
+/* Settings: data export and deletion rows */
+.data-row {
+    align-items: center;
+    border-top: 1px solid var(--line);
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.75rem;
+    justify-content: space-between;
+    padding: 0.85rem 0;
+}
+
+.data-row strong {
+    display: block;
+    font-size: 0.92rem;
+}
+
+.data-row small {
+    color: var(--ink-500);
+    display: block;
+    max-width: 46ch;
+}
+
+.data-row-danger strong {
+    color: var(--bs-danger);
+}

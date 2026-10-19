@@ -5,7 +5,9 @@ from urllib.parse import urlparse
 from flask import Blueprint, current_app, g, jsonify, redirect, render_template, request, session, url_for
 from authlib.integrations.flask_client import OAuth
 
+from config import IS_PRODUCTION
 from database import accept_pending_invites, get_user_by_email, get_user_workspaces, upsert_user
+from ratelimit import limit
 
 auth_bp = Blueprint('auth', __name__)
 oauth = OAuth()
@@ -27,7 +29,9 @@ def safe_next_url(target):
 
 
 def is_dev_login_allowed():
-    """Dev login is opt-in via ALLOW_DEV_LOGIN and only ever works from this machine."""
+    """Dev login is opt-in via ALLOW_DEV_LOGIN, only works from this machine, and never on a hosted site."""
+    if IS_PRODUCTION:
+        return False
     enabled = os.getenv('ALLOW_DEV_LOGIN', 'false').lower() in {'1', 'true', 'yes'}
     return enabled and request.remote_addr in LOOPBACK_ADDRESSES
 
@@ -93,12 +97,14 @@ def login_page():
         'login.html',
         google_configured=is_google_configured(),
         allow_dev_login=is_dev_login_allowed(),
+        is_production=IS_PRODUCTION,
         error=request.args.get('error', ''),
         next_url=next_url or ''
     )
 
 
 @auth_bp.route('/auth/google')
+@limit('signin', per_ip=True, minute=20, hourly=100)
 def google_login():
     if not is_google_configured():
         return redirect(url_for('auth.login_page', error='not_configured'))
@@ -112,6 +118,7 @@ def google_login():
 
 
 @auth_bp.route('/auth/callback')
+@limit('callback', per_ip=True, minute=20, hourly=100)
 def google_callback():
     if not is_google_configured():
         return redirect(url_for('auth.login_page', error='not_configured'))

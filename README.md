@@ -100,6 +100,29 @@ python app.py
 Open your web browser and navigate to http://127.0.0.1:5000/.
 (Note: The application will automatically generate the inventory.db database and an uploads/ folder upon its first run. Files from older versions stored in static/uploads/ are moved there automatically.)
 
+### Deploying to Vercel
+Vercel runs the app as a serverless function whose disk is temporary, so production data lives in **Supabase**
+(Postgres for the database, a private Storage bucket for receipts). Locally the app keeps using `inventory.db`
+and the `uploads/` folder.
+
+1. **Supabase:** create a project in the **South Asia (Mumbai)** region (it must match `"regions": ["bom1"]` in
+   `vercel.json`; if you pick another region, change that line to the nearest Vercel region). In **Storage**, create a bucket named `receipts` and keep it **private**.
+   Copy the *Transaction pooler* connection string (port 6543) from **Project Settings -> Database**, and the
+   *Project URL* and *service_role* key from **Project Settings -> API**.
+2. **Vercel environment variables** (Project Settings -> Environment Variables, Production): `SECRET_KEY`,
+   `GROQ_API_KEY`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `DATABASE_URL`, `SUPABASE_URL`,
+   `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_BUCKET=receipts`, `CRON_SECRET`, `CONTACT_EMAIL`. See `.env.example`.
+3. **Google Cloud:** add `https://<your-app>.vercel.app/auth/callback` as an authorized redirect URI, then publish
+   the OAuth consent screen with `https://<your-app>.vercel.app/` as the homepage and
+   `https://<your-app>.vercel.app/privacy` as the privacy policy.
+4. **Existing data (optional):** with the Supabase values in your local `.env`, run
+   `python scripts/migrate_to_supabase.py` (dry run) and then `python scripts/migrate_to_supabase.py --apply`.
+5. Deploy. `vercel.json` sets a 60-second function timeout and a daily clean-up job at 03:00 UTC.
+
+On Vercel the app automatically: requires `SECRET_KEY`, uses secure cookies and HTTPS URLs, disables dev login,
+limits uploads to 4 MB (large photos are shrunk in the browser first), and serves files through short-lived
+signed links.
+
 ### Family Workspaces
 Anyone with a Google account can sign in. Each family gets its own private **workspace** with its own items, receipts, settings and members:
 
@@ -116,7 +139,10 @@ Upgrading from a version without workspaces is automatic: existing data becomes 
 ```
 python -m unittest discover -s tests -v
 ```
-The tests use a throwaway database and never call Groq. They check that families cannot see or change each other's data.
+The tests use a throwaway database, never read `.env` and never call Groq. They check that families cannot see or
+change each other's data, plus security (cross-site requests, headers, rate limits, dev login in production),
+item editing, exports and account deletion. To run them against Postgres, set `TEST_DATABASE_URL` to an **empty,
+throwaway** database (it is wiped first).
 
 ### Project Architecture
 * **app.py:** The main Flask server. It routes web traffic, handles API requests from the frontend, and manages file uploads.

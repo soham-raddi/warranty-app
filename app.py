@@ -1,18 +1,25 @@
 import os
 import secrets
 import shutil
+from urllib.parse import urlparse
 from dotenv import load_dotenv
 
 # Load .env before anything else reads configuration. override=True makes .env win over stale
 # variables left in the shell (python-dotenv otherwise silently keeps the shell's values).
-load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), '.env'), override=True)
-
-from flask import Flask, g, jsonify, redirect, request, session, url_for
+# On Vercel there is no .env file; settings come from the project's environment variables.
+# Tests set SKIP_DOTENV so they can never pick up real credentials (such as the live database) from .env.
+if not os.getenv('SKIP_DOTENV'):
+    load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), '.env'), override=True)
 
 from datetime import timedelta
 
+from flask import Flask, g, jsonify, redirect, request, send_from_directory, session, url_for
+from werkzeug.middleware.proxy_fix import ProxyFix
+
+from config import IS_PRODUCTION, MAX_UPLOAD_BYTES
 from database import (
     accept_pending_invites,
+    end_request,
     get_all_settings,
     get_membership_role,
     get_user_by_id,
@@ -20,27 +27,39 @@ from database import (
     get_workspace,
     relocate_upload_paths,
 )
-from routes import auth_bp, chat_bp, init_oauth, pages_bp, receipts_bp, settings_bp, workspaces_bp
+from routes import auth_bp, chat_bp, cron_bp, init_oauth, pages_bp, receipts_bp, settings_bp, workspaces_bp
 
-app = Flask(__name__)
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+PUBLIC_DIR = os.path.join(BASE_DIR, 'public')
+
+# Static files live in public/ so Vercel can serve them from its CDN; locally Flask serves the same folder.
+app = Flask(__name__, static_folder=os.path.join(PUBLIC_DIR, 'static'), static_url_path='/static')
 
 secret_key = os.getenv('SECRET_KEY', '').strip()
 if not secret_key:
-    # A random per-process key keeps sessions secure; users are signed out on restart.
+    if IS_PRODUCTION:
+        # Every server instance would invent a different key and sign people out at random.
+        raise RuntimeError('SECRET_KEY must be set in the hosting environment variables.')
     secret_key = secrets.token_hex(32)
     print('WARNING: SECRET_KEY is not set. Using a random key; sessions will reset on restart.')
 app.secret_key = secret_key
 
+if IS_PRODUCTION or os.getenv('TRUST_PROXY', '').lower() in {'1', 'true', 'yes'}:
+    # Vercel terminates HTTPS in front of the app; trust its forwarded headers so Flask sees the real
+    # https:// address (for Google sign-in and invite links) and the visitor's IP (for rate limits).
+    app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
+    app.config['PREFERRED_URL_SCHEME'] = 'https'
+
 app.config['SESSION_COOKIE_HTTPONLY'] = True
 app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
 app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(days=30)
-# On a hosted (https) install set SESSION_COOKIE_SECURE=true so the login cookie is never sent over http.
-app.config['SESSION_COOKIE_SECURE'] = os.getenv('SESSION_COOKIE_SECURE', 'false').lower() in {'1', 'true', 'yes'}
+# The login cookie is only ever sent over https in production (override with SESSION_COOKIE_SECURE).
+app.config['SESSION_COOKIE_SECURE'] = os.getenv(
+    'SESSION_COOKIE_SECURE', 'true' if IS_PRODUCTION else 'false'
+).lower() in {'1', 'true', 'yes'}
 
-# Uploads live outside static/ so they are only served to signed-in users via /files/...
 app.config['UPLOAD_FOLDER'] = 'uploads'
-app.config['WARRANTY_UPLOAD_FOLDER'] = 'uploads/warranty_cards'
-app.config['MAX_CONTENT_LENGTH'] = 20 * 1024 * 1024  # 20 MB per request
+app.config['MAX_CONTENT_LENGTH'] = MAX_UPLOAD_BYTES + 256 * 1024  # room for form fields around the file
 
 LEGACY_UPLOAD_FOLDER = 'static/uploads'
 
@@ -67,16 +86,17 @@ def migrate_legacy_uploads():
             os.rmdir(root)
 
 
-os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
-os.makedirs(app.config['WARRANTY_UPLOAD_FOLDER'], exist_ok=True)
-migrate_legacy_uploads()
+if not IS_PRODUCTION:
+    # Local development keeps files on disk; production uses Supabase Storage (see storage.py).
+    os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
+    migrate_legacy_uploads()
 
 # Initialize OAuth with Authlib
 init_oauth(app)
 if os.getenv('GOOGLE_CLIENT_ID', '').strip() and os.getenv('GOOGLE_CLIENT_SECRET', '').strip():
     print('Google sign-in: enabled')
 else:
-    print('Google sign-in: DISABLED (GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET not found in .env)')
+    print('Google sign-in: DISABLED (GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET not set)')
 
 # Register Blueprints
 app.register_blueprint(auth_bp)
@@ -85,9 +105,27 @@ app.register_blueprint(receipts_bp)
 app.register_blueprint(chat_bp)
 app.register_blueprint(settings_bp)
 app.register_blueprint(workspaces_bp)
+app.register_blueprint(cron_bp)
 
+# Paths anyone may open without signing in.
+PUBLIC_PATHS = ('/login', '/auth', '/static', '/privacy', '/terms', '/manifest.webmanifest', '/api/cron/')
 # Paths a signed-in person may use before they belong to any workspace.
-NO_WORKSPACE_PATHS = ('/welcome', '/api/workspaces', '/api/auth/me')
+NO_WORKSPACE_PATHS = ('/welcome', '/api/workspaces', '/api/auth/me', '/api/account')
+UNSAFE_METHODS = {'POST', 'PUT', 'PATCH', 'DELETE'}
+
+
+@app.before_request
+def reject_cross_site_requests():
+    """CSRF protection: browsers send Origin (or Referer) on form posts and fetch calls; changes must come from
+    this site. Requests without either header can't carry someone's cookie from another site."""
+    if request.method not in UNSAFE_METHODS:
+        return None
+    source = request.headers.get('Origin') or request.headers.get('Referer')
+    if not source:
+        return None
+    if urlparse(source).netloc != request.host:  # also rejects "Origin: null" from sandboxed pages
+        return jsonify({'error': 'Cross-site request blocked'}), 403
+    return None
 
 
 @app.before_request
@@ -98,8 +136,7 @@ def enforce_authentication():
     g.workspace_id = None
     g.role = None
 
-    # Allow static files and auth endpoints
-    if request.path == '/login' or request.path.startswith('/auth') or request.path.startswith('/static'):
+    if request.path.startswith(PUBLIC_PATHS):
         return None
 
     is_api = request.path.startswith('/api/') or request.path == '/upload'
@@ -151,10 +188,53 @@ def enforce_authentication():
     return None
 
 
+# Only our own code plus the jsdelivr CDN (Bootstrap, icons, marked, DOMPurify) may run or load.
+CONTENT_SECURITY_POLICY = '; '.join([
+    "default-src 'self'",
+    "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net",
+    "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net",
+    "font-src 'self' data: https://cdn.jsdelivr.net",
+    "img-src 'self' data: blob: https:",
+    "connect-src 'self'",
+    "frame-ancestors 'none'",
+    "base-uri 'self'",
+    "form-action 'self' https://accounts.google.com",
+    "object-src 'none'",
+])
+
+
+@app.after_request
+def add_security_headers(response):
+    response.headers.setdefault('X-Content-Type-Options', 'nosniff')
+    response.headers.setdefault('Referrer-Policy', 'strict-origin-when-cross-origin')
+    response.headers.setdefault('X-Frame-Options', 'DENY')
+    response.headers.setdefault('Permissions-Policy', 'camera=(self), microphone=(), geolocation=()')
+    if response.mimetype == 'text/html':
+        # Receipts (PDFs, images) are left without a policy so the browser's viewer keeps working.
+        response.headers.setdefault('Content-Security-Policy', CONTENT_SECURITY_POLICY)
+    if IS_PRODUCTION:
+        response.headers.setdefault('Strict-Transport-Security', 'max-age=31536000; includeSubDomains')
+    if request.path.startswith(('/api/', '/files/')) or g.get('current_user'):
+        # Personal data must never be stored by shared caches.
+        response.headers.setdefault('Cache-Control', 'private, no-store')
+    return response
+
+
+@app.teardown_appcontext
+def release_database(_error=None):
+    end_request()
+
+
 @app.errorhandler(413)
 def file_too_large(_error):
-    limit_mb = app.config['MAX_CONTENT_LENGTH'] // (1024 * 1024)
+    limit_mb = MAX_UPLOAD_BYTES // (1024 * 1024)
     return jsonify({'error': f'File is too large. The maximum upload size is {limit_mb} MB.'}), 413
+
+
+@app.route('/manifest.webmanifest')
+def web_manifest():
+    # Vercel serves this from public/ directly; this route covers local development.
+    return send_from_directory(PUBLIC_DIR, 'manifest.webmanifest', mimetype='application/manifest+json')
 
 
 @app.context_processor
@@ -173,6 +253,7 @@ def inject_current_user():
         'current_workspace': g.get('workspace'),
         'current_role': g.get('role'),
         'my_workspaces': get_user_workspaces(user['id']) if user else [],
+        'max_upload_bytes': MAX_UPLOAD_BYTES,
         'ui': ui,
     }
 

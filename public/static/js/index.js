@@ -419,12 +419,72 @@ async function saveServiceHistory(event) {
     }
 }
 
+// ---- Uploads: shrink large photos in the browser so they fit the server's size limit ----
+const MAX_IMAGE_EDGE = 2000;
+
+function maxUploadBytes() {
+    return Number(document.body.dataset.maxUpload) || 4 * 1024 * 1024;
+}
+
+async function prepareUpload(file) {
+    // Returns a file small enough to upload, or throws an Error with a message for the person.
+    const isImage = /^image\/(jpeg|png|webp)$/.test(file.type);
+    if (isImage && (file.size > maxUploadBytes() * 0.8 || file.size > 1.5 * 1024 * 1024)) {
+        file = await shrinkImage(file);
+    }
+    if (file.size > maxUploadBytes()) {
+        const limitMb = Math.floor(maxUploadBytes() / (1024 * 1024));
+        throw new Error(isImage
+            ? `This photo is still larger than ${limitMb} MB after shrinking. Try a closer, simpler photo.`
+            : `This file is larger than ${limitMb} MB. Try a smaller PDF, or upload a photo of the receipt instead.`);
+    }
+    return file;
+}
+
+function shrinkImage(file) {
+    return new Promise((resolve) => {
+        const url = URL.createObjectURL(file);
+        const img = new Image();
+        img.onload = () => {
+            const scale = Math.min(1, MAX_IMAGE_EDGE / Math.max(img.width, img.height));
+            const canvas = document.createElement('canvas');
+            canvas.width = Math.round(img.width * scale);
+            canvas.height = Math.round(img.height * scale);
+            canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
+            URL.revokeObjectURL(url);
+            canvas.toBlob(blob => {
+                const name = file.name.replace(/\.[^.]+$/, '') + '.jpg';
+                resolve(blob ? new File([blob], name, { type: 'image/jpeg' }) : file);
+            }, 'image/jpeg', 0.85);
+        };
+        img.onerror = () => { URL.revokeObjectURL(url); resolve(file); };
+        img.src = url;
+    });
+}
+
+async function readJsonResponse(res) {
+    // Parses an API reply, turning hosting errors (too large, timeout) into friendly messages.
+    try {
+        return await res.json();
+    } catch (e) {
+        if (res.status === 413) return { error: 'That file is too large to upload.' };
+        if (res.status === 504) return { error: 'The server took too long to respond. Please try again.' };
+        if (res.status === 429) return { error: 'Too many requests. Please wait a little and try again.' };
+        return { error: `Something went wrong (error ${res.status}). Please try again.` };
+    }
+}
+
 async function uploadReceipt() {
     const fileInput = byId('receiptFile');
     if (!fileInput) return;
 
-    const file = fileInput.files[0];
+    let file = fileInput.files[0];
     if (!file) return showToast('Choose a receipt image or PDF first.', 'warning');
+    try {
+        file = await prepareUpload(file);
+    } catch (e) {
+        return showToast(e.message, 'danger');
+    }
 
     const btn = byId('upBtn');
     const loader = byId('upLoader');
@@ -437,7 +497,7 @@ async function uploadReceipt() {
 
     try {
         const res = await fetch('/upload', { method: 'POST', body: formData });
-        const data = await res.json();
+        const data = await readJsonResponse(res);
 
         if (res.ok) {
             setText('modalItemName', data.item_name || 'N/A');
@@ -478,6 +538,16 @@ function initDropZone() {
     const zone = byId('dropZone');
     const input = byId('receiptFile');
     if (!zone || !input) return;
+
+    const camera = byId('receiptCamera');
+    camera?.addEventListener('change', () => {
+        const photo = camera.files[0];
+        if (!photo) return;
+        const transfer = new DataTransfer();
+        transfer.items.add(photo);
+        input.files = transfer.files;
+        showSelectedReceipt(photo);
+    });
 
     input.addEventListener('change', () => showSelectedReceipt(input.files[0] || null));
     zone.addEventListener('keydown', (event) => {
@@ -523,7 +593,7 @@ async function loadInventory() {
         tbody.innerHTML = data.items.map(i => {
             const itemId = Number(i.id);
             const expiry = i.warranty_expires_on
-                ? `<small class="text-muted d-block">Warranty until ${escapeHtml(formatPlainDate(i.warranty_expires_on))}</small>`
+                ? `<small class="text-muted d-block" title="${i.warranty_months ? `${Number(i.warranty_months)}-month warranty` : 'Using the default warranty period'}">Warranty until ${escapeHtml(formatPlainDate(i.warranty_expires_on))}${i.warranty_months ? '' : ' *'}</small>`
                 : '';
             return `
             <tr>
@@ -546,6 +616,7 @@ async function loadInventory() {
                 </td>
                 <td class="text-end pe-4">
                     <div class="btn-group">
+                        <button type="button" class="btn btn-sm btn-outline-primary" data-action="edit-item" data-item-id="${itemId}" title="Edit details"><i class="bi bi-pencil"></i></button>
                         <button type="button" class="btn btn-sm btn-outline-info" data-action="service-history" data-item-id="${itemId}" data-item-name="${escapeHtml(i.item_name || 'Item')}" title="View service history"><i class="bi bi-clock-history"></i></button>
                         <a href="/files/receipt/${itemId}" download class="btn btn-sm btn-outline-secondary" title="Download receipt"><i class="bi bi-download"></i></a>
                         ${canManageWorkspace() ? `<button type="button" data-action="delete-item" data-item-id="${itemId}" class="btn btn-sm btn-outline-danger" title="Delete Record"><i class="bi bi-trash"></i></button>` : ''}
@@ -652,8 +723,14 @@ async function attachWarrantyCard(id) {
     picker.accept = '.jpg,.jpeg,.png,.webp,.pdf';
 
     picker.onchange = async () => {
-        const file = picker.files && picker.files[0];
+        let file = picker.files && picker.files[0];
         if (!file) return;
+        try {
+            file = await prepareUpload(file);
+        } catch (e) {
+            showToast(e.message, 'danger');
+            return;
+        }
 
         const formData = new FormData();
         formData.append('warranty_card', file);
@@ -663,7 +740,7 @@ async function attachWarrantyCard(id) {
                 method: 'POST',
                 body: formData
             });
-            const data = await res.json();
+            const data = await readJsonResponse(res);
             if (!res.ok) {
                 showToast(data.error || 'Failed to attach warranty card.', 'danger');
                 return;
@@ -1205,6 +1282,9 @@ document.addEventListener('click', (event) => {
         case 'delete-item':
             delItem(itemId);
             break;
+        case 'edit-item':
+            openEditItem(itemId);
+            break;
         case 'open-conversation':
             openConversation(target.dataset.conversationId);
             break;
@@ -1277,3 +1357,45 @@ window.onload = async () => {
         await startAssistantSession();
     }
 };
+
+// ---- Edit item ----
+let editingItemId = null;
+
+async function openEditItem(itemId) {
+    const modalEl = byId('editItemModal');
+    if (!modalEl) return;
+    try {
+        const res = await fetch(`/api/inventory/${Number(itemId)}`);
+        const data = await readJsonResponse(res);
+        if (!res.ok) throw new Error(data.error || 'Could not load this item.');
+        editingItemId = Number(itemId);
+        const form = byId('editItemForm');
+        [...form.elements].forEach(field => {
+            if (field.name) field.value = data.item[field.name] ?? '';
+        });
+        bootstrap.Modal.getOrCreateInstance(modalEl).show();
+    } catch (e) {
+        showToast(e.message, 'danger');
+    }
+}
+
+document.addEventListener('submit', async (event) => {
+    if (event.target.id !== 'editItemForm') return;
+    event.preventDefault();
+    const payload = {};
+    [...event.target.elements].forEach(field => { if (field.name) payload[field.name] = field.value.trim(); });
+    try {
+        const res = await fetch(`/api/inventory/${editingItemId}`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+        const data = await readJsonResponse(res);
+        if (!res.ok) throw new Error(data.error || 'Could not save the changes.');
+        bootstrap.Modal.getOrCreateInstance(byId('editItemModal')).hide();
+        showToast('Item updated.', 'success');
+        await Promise.all([loadInventory(), loadDashboard()]);
+    } catch (e) {
+        showToast(e.message, 'danger');
+    }
+});

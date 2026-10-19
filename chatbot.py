@@ -3,6 +3,7 @@ import re
 import datetime
 import json
 from database import get_all_settings, get_inventory_analytics
+import storage
 from llm_extractor import CHAT_MODEL, VISION_MODEL, encode_image, get_client
 from thefuzz import fuzz
 
@@ -94,9 +95,9 @@ def ask_digital_twin(user_message, chat_history, workspace_id):
                 "item_name": first_missing.get('item_name') or "this item"
             }
     
-    if target_item and target_item.get('file_path') and os.path.exists(target_item['file_path']):
+    if target_item and target_item.get('file_path'):
         try:
-            image_list = encode_image(target_item['file_path'])
+            image_list = encode_image(storage.read(target_item['file_path']), target_item['file_path'])
             target_model = VISION_MODEL
             
             content_payload = [{"type": "text", "text": f"{user_message}\n\n[System Note: I have attached the original receipt documents for the mentioned item. Use them to find fine-print details.]"}]

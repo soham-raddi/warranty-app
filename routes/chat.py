@@ -3,6 +3,7 @@ import re
 from flask import Blueprint, g, jsonify, request
 
 from chatbot import ask_digital_twin
+from ratelimit import limit
 from database import clear_chat_messages, get_chat_conversations, get_chat_messages, save_chat_message, search_chat_messages
 
 chat_bp = Blueprint('chat', __name__)
@@ -13,6 +14,7 @@ CONVERSATION_ID_PATTERN = re.compile(r'^[A-Za-z0-9_-]{1,64}$')
 
 
 @chat_bp.route('/api/chat', methods=['POST'])
+@limit('chat', minute=10, hourly=60, daily=200)
 def chat():
     data = request.json or {}
     user_message = str(data.get('message') or '').strip()
@@ -20,6 +22,8 @@ def chat():
 
     if not user_message:
         return jsonify({'error': 'message is required'}), 400
+    if len(user_message) > 2000:
+        return jsonify({'error': 'Messages can be at most 2000 characters'}), 400
     if not CONVERSATION_ID_PATTERN.match(str(conversation_id)):
         return jsonify({'error': 'Invalid conversation id'}), 400
 

@@ -1,0 +1,14 @@
+# Never upload local data or secrets to Vercel (production uses Supabase and Vercel environment variables)
+.env
+inventory.db
+inventory.db-*
+uploads/
+static/uploads/
+# Local virtual environment and development files
+warranty/
+.venv/
+venv/
+__pycache__/
+tests/
+scripts/
+ocr.py

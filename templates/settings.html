@@ -358,6 +358,47 @@
                             <button type="button" class="btn btn-outline-danger btn-sm" id="leaveWorkspaceBtn"><i class="bi bi-box-arrow-left me-1"></i> Leave workspace</button>
                         </div>
                         {% endif %}
+                        <div class="settings-group mt-4">
+                            <h3 class="settings-group-title mb-1">Your data</h3>
+                            <p class="settings-group-note small">Download this workspace's inventory, or remove data for good.</p>
+
+                            <div class="data-row">
+                                <div>
+                                    <strong>Export inventory</strong>
+                                    <small>All items and service history as a CSV file (opens in Excel or Google Sheets).</small>
+                                </div>
+                                <a class="btn btn-outline-primary btn-sm" href="{{ url_for('workspaces.export_workspace') }}"><i class="bi bi-download me-1"></i> Download CSV</a>
+                            </div>
+
+                            {% if current_role == 'owner' %}
+                            <div class="data-row">
+                                <div>
+                                    <strong>Transfer ownership</strong>
+                                    <small>Make another member the owner. You'll stay on as an admin.</small>
+                                </div>
+                                <div class="d-flex gap-2">
+                                    <select id="transferOwnerSelect" class="form-select form-select-sm" aria-label="New owner"></select>
+                                    <button type="button" class="btn btn-outline-secondary btn-sm text-nowrap" id="transferOwnerBtn">Transfer</button>
+                                </div>
+                            </div>
+
+                            <div class="data-row data-row-danger">
+                                <div>
+                                    <strong>Delete this workspace</strong>
+                                    <small>Permanently deletes {{ current_workspace.name }} with all its items, receipts, settings and chats, for every member.</small>
+                                </div>
+                                <button type="button" class="btn btn-outline-danger btn-sm" id="deleteWorkspaceBtn">Delete workspace</button>
+                            </div>
+                            {% endif %}
+
+                            <div class="data-row data-row-danger">
+                                <div>
+                                    <strong>Delete my account</strong>
+                                    <small>Removes your account, your chats and any workspace you own on your own. Workspaces others still use must be transferred first.</small>
+                                </div>
+                                <button type="button" class="btn btn-outline-danger btn-sm" id="deleteAccountBtn">Delete account</button>
+                            </div>
+                        </div>
                     </div>
                 </div>
             </section>
@@ -417,6 +458,14 @@ async function loadWorkspaceUsers() {
         }).join('') || stateRow(5, 'No members yet.');
 
         renderPendingInvites(data.invites || []);
+        const transferSelect = document.getElementById('transferOwnerSelect');
+        if (transferSelect) {
+            const others = (data.members || []).filter(m => m.id !== data.current_user_id);
+            transferSelect.innerHTML = others.length
+                ? others.map(m => `<option value="${Number(m.id)}">${escapeHtml(m.name || m.email)} (${escapeHtml(m.email)})</option>`).join('')
+                : '<option value="">No other members yet</option>';
+            document.getElementById('transferOwnerBtn').disabled = !others.length;
+        }
     } catch (e) {
         tbody.innerHTML = stateRow(5, 'Network error loading members.', true);
     }
@@ -532,6 +581,43 @@ document.getElementById('leaveWorkspaceBtn')?.addEventListener('click', async ()
     try {
         const data = await sendJson('/api/workspace/leave', 'POST');
         window.location.href = data.redirect || '/';
+    } catch (e) {
+        showToast(e.message, 'danger');
+    }
+});
+
+document.getElementById('transferOwnerBtn')?.addEventListener('click', async () => {
+    const select = document.getElementById('transferOwnerSelect');
+    const label = select.options[select.selectedIndex]?.text || 'this member';
+    if (!confirm(`Make ${label} the owner of this workspace? You will become an admin.`)) return;
+    try {
+        const data = await sendJson('/api/workspace/transfer', 'POST', { user_id: Number(select.value) });
+        showToast(data.message, 'success');
+        setTimeout(() => window.location.reload(), 800);
+    } catch (e) {
+        showToast(e.message, 'danger');
+    }
+});
+
+document.getElementById('deleteWorkspaceBtn')?.addEventListener('click', async () => {
+    const name = {{ current_workspace.name|tojson }};
+    const typed = prompt(`This permanently deletes "${name}" and everything in it for all members.\n\nType the workspace name to confirm:`);
+    if (typed === null) return;
+    try {
+        const data = await sendJson('/api/workspace', 'DELETE', { confirm_name: typed.trim() });
+        window.location.href = data.redirect || '/';
+    } catch (e) {
+        showToast(e.message, 'danger');
+    }
+});
+
+document.getElementById('deleteAccountBtn')?.addEventListener('click', async () => {
+    const email = {{ current_user.email|tojson }};
+    const typed = prompt(`This permanently deletes your account (${email}).\n\nType your email address to confirm:`);
+    if (typed === null) return;
+    try {
+        const data = await sendJson('/api/account', 'DELETE', { confirm_email: typed.trim() });
+        window.location.href = data.redirect || '/login';
     } catch (e) {
         showToast(e.message, 'danger');
     }
