@@ -1499,3 +1499,89 @@ body[data-theme="dark"] .modal-footer {
 body[data-theme="dark"] .modal-content .btn-close {
     filter: invert(1) grayscale(100%) brightness(200%);
 }
+
+/* ---- Footer ---- */
+.app-body {
+    display: flex;
+    flex-direction: column;
+}
+
+.app-main {
+    flex: 1 0 auto;
+    width: 100%;
+}
+
+.app-footer {
+    border-top: 1px solid var(--line);
+    color: var(--ink-500);
+    margin-top: 1rem;
+    padding: 2rem 0 1.25rem;
+}
+
+.app-footer-grid {
+    display: grid;
+    gap: 1.5rem 2rem;
+    grid-template-columns: minmax(0, 2fr) repeat(2, minmax(0, 1fr));
+}
+
+.app-footer-about {
+    max-width: 340px;
+}
+
+.app-footer .brand-link {
+    color: var(--ink-900);
+}
+
+.brand-icon.brand-icon-sm {
+    border-radius: 9px;
+    font-size: 0.95rem;
+    height: 30px;
+    width: 30px;
+}
+
+.app-footer-heading {
+    color: var(--ink-900);
+    font-size: 0.8rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    margin-bottom: 0.6rem;
+    text-transform: uppercase;
+}
+
+.app-footer-links {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+}
+
+.app-footer-links a {
+    color: var(--ink-500);
+    font-size: 0.9rem;
+    text-decoration: none;
+    width: fit-content;
+}
+
+.app-footer-links a:hover {
+    color: var(--brand);
+}
+
+.app-footer-bottom {
+    border-top: 1px solid var(--line);
+    display: flex;
+    flex-wrap: wrap;
+    font-size: 0.8rem;
+    gap: 0.5rem 1.5rem;
+    justify-content: space-between;
+    margin-top: 1.5rem;
+    padding-top: 1rem;
+}
+
+@media (max-width: 575.98px) {
+    .app-footer-grid {
+        grid-template-columns: 1fr 1fr;
+    }
+
+    .app-footer-about {
+        grid-column: 1 / -1;
+    }
+}

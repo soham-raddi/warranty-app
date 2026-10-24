@@ -11,7 +11,7 @@ from dotenv import load_dotenv
 if not os.getenv('SKIP_DOTENV'):
     load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), '.env'), override=True)
 
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 from flask import Flask, g, jsonify, redirect, request, send_from_directory, session, url_for
 from werkzeug.middleware.proxy_fix import ProxyFix
@@ -29,6 +29,7 @@ from database import (
     relocate_upload_paths,
 )
 from routes import auth_bp, chat_bp, cron_bp, init_oauth, pages_bp, receipts_bp, settings_bp, workspaces_bp
+from routes.pages import contact_email
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 PUBLIC_DIR = os.path.join(BASE_DIR, 'public')
@@ -257,6 +258,8 @@ def inject_current_user():
         'my_workspaces': get_user_workspaces(user['id']) if user else [],
         'max_upload_bytes': MAX_UPLOAD_BYTES,
         'email_enabled': emails.EMAIL_ENABLED,
+        'contact_email': contact_email(),
+        'current_year': datetime.now().year,
         'ui': ui,
     }
 

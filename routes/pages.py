@@ -32,14 +32,14 @@ def settings_page():
 
 @pages_bp.route('/privacy')
 def privacy_page():
-    return render_template('legal.html', page='privacy', contact_email=_contact_email())
+    return render_template('legal.html', page='privacy', contact_email=contact_email())
 
 
 @pages_bp.route('/terms')
 def terms_page():
-    return render_template('legal.html', page='terms', contact_email=_contact_email())
+    return render_template('legal.html', page='terms', contact_email=contact_email())
 
 
-def _contact_email():
-    # Shown on the legal pages; set CONTACT_EMAIL in the hosting environment.
+def contact_email():
+    # Shown on the legal pages and in the footer; set CONTACT_EMAIL in the hosting environment.
     return os.getenv('CONTACT_EMAIL', '').strip() or os.getenv('OWNER_EMAIL', '').strip()
