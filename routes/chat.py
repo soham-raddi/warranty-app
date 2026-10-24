@@ -41,7 +41,8 @@ def chat():
             save_chat_message(*owner, 'assistant', assistant_reply, conversation_id=conversation_id)
         return jsonify({
             'reply': assistant_reply,
-            'action': result.get('action')
+            'action': result.get('action'),
+            'error': bool(result.get('error')),
         })
 
     assistant_reply = str(result)

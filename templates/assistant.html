@@ -3,48 +3,44 @@
 {% block title %}Assistant | Digital Twin{% endblock %}
 
 {% block content %}
-<section class="page-hero mb-4">
-    <h1 class="page-title">Assistant</h1>
-    <p class="page-subtitle">Ask anything about your items, spending and warranties. Past conversations are saved in the sidebar.</p>
-</section>
-
-<div class="chat-layout">
-    <aside class="chat-sidebar shadow-sm">
-        <div class="sidebar-title"><i class="bi bi-clock-history"></i> Conversation history</div>
-        <div class="sidebar-subtitle">Grouped by date</div>
-        <div id="recentConversations"></div>
-        <div class="d-flex justify-content-between align-items-center gap-2 mt-3 pt-2 border-top">
-            <button class="btn btn-outline-primary btn-sm" onclick="startNewConversation()"><i class="bi bi-plus-circle"></i> New Conversation</button>
-            <button class="btn btn-outline-danger btn-sm" onclick="clearChatHistory()"><i class="bi bi-trash3"></i> Clear all</button>
+<div class="ai-shell" id="aiShell">
+    <aside class="ai-sidebar" id="aiSidebar" aria-label="Conversations">
+        <div class="ai-sidebar-head">
+            <span class="ai-sidebar-title">Chats</span>
+            <button type="button" class="btn btn-primary btn-sm ai-new-btn" onclick="startNewConversation()">
+                <i class="bi bi-plus-lg"></i> New chat
+            </button>
         </div>
+        <div class="ai-search">
+            <i class="bi bi-search" aria-hidden="true"></i>
+            <input type="search" id="chatSearchInput" class="form-control form-control-sm" placeholder="Search chats" aria-label="Search chats">
+        </div>
+        <div class="ai-conversations" id="recentConversations"></div>
+        <button type="button" class="ai-clear-btn" onclick="clearChatHistory()"><i class="bi bi-trash3"></i> Clear all chats</button>
     </aside>
 
-    <div class="chat-shell shadow-sm">
-        <div class="chat-topbar">
-            <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-2">
-                <div>
-                    <div class="chat-title"><i class="bi bi-stars"></i> Digital Twin assistant</div>
-                    <div class="chat-subtitle">Start a new conversation at any time, or pick up a saved one.</div>
-                </div>
-                <div class="chat-controls d-flex gap-2">
-                    <button class="btn btn-outline-primary btn-sm" onclick="startNewConversation()"><i class="bi bi-plus-circle"></i> New Conversation</button>
-                </div>
+    <section class="ai-main" aria-label="Chat">
+        <header class="ai-main-head">
+            <button type="button" class="btn btn-sm ai-icon-btn d-lg-none" onclick="toggleChatSidebar()" aria-label="Show chats" aria-controls="aiSidebar">
+                <i class="bi bi-layout-sidebar"></i>
+            </button>
+            <div class="ai-main-title" id="chatTitle">New chat</div>
+            <button type="button" class="btn btn-sm ai-icon-btn d-lg-none" onclick="startNewConversation()" aria-label="New chat">
+                <i class="bi bi-plus-lg"></i>
+            </button>
+        </header>
+
+        <div class="ai-thread" id="chatThread" aria-live="polite"></div>
+
+        <form class="ai-composer" id="chatComposer">
+            <div class="ai-composer-box">
+                <textarea id="chatInput" rows="1" maxlength="2000" placeholder="Ask anything about your items…" aria-label="Message"></textarea>
+                <button type="submit" class="btn btn-primary ai-send-btn" id="chatSendBtn" aria-label="Send" disabled>
+                    <i class="bi bi-arrow-up"></i>
+                </button>
             </div>
-            <div class="input-group input-group-sm">
-                <input type="text" id="chatSearchInput" class="form-control chat-search-input" placeholder="Search conversations..." onkeypress="if(event.key==='Enter') searchChatHistory()">
-                <button class="btn btn-outline-secondary" onclick="searchChatHistory()"><i class="bi bi-search"></i></button>
-                <button class="btn btn-outline-secondary" onclick="resetChatSearch()"><i class="bi bi-x-circle"></i></button>
-            </div>
-        </div>
-        <div id="chat-box">
-            <div class="msg-wrap assistant"><div class="msg-ai">New conversation started. Ask me anything about your inventory.</div></div>
-        </div>
-        <div class="chat-input-area">
-            <div class="input-group">
-                <input type="text" id="chatInput" class="form-control" placeholder="Ask about spending or items..." onkeypress="if(event.key==='Enter') sendMessage()">
-                <button class="btn btn-primary" onclick="sendMessage()"><i class="bi bi-send"></i></button>
-            </div>
-        </div>
-    </div>
+            <div class="ai-composer-note">Enter to send, Shift+Enter for a new line. Answers come from your inventory and can contain mistakes.</div>
+        </form>
+    </section>
 </div>
 {% endblock %}

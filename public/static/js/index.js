@@ -945,42 +945,63 @@ function separatorLabel(value) {
     }
 }
 
+const CHAT_SUGGESTIONS = [
+    { icon: 'bi-wallet2', text: 'How much have I spent this year?' },
+    { icon: 'bi-hourglass-split', text: 'Which warranties end in the next 3 months?' },
+    { icon: 'bi-file-earmark-x', text: "Which items don't have a warranty card yet?" },
+    { icon: 'bi-bag', text: 'What did I buy most recently?' },
+];
+
 function renderAssistantAction(action) {
     if (!action || action.type !== 'attach_warranty_card' || !action.item_id) return '';
-    const label = escapeHtml(action.item_name || 'item');
     return `
-        <div class="mt-2">
-            <button onclick="attachWarrantyCard(${Number(action.item_id)})" class="btn btn-sm btn-warning">
-                <i class="bi bi-paperclip"></i> Attach Warranty Card for ${label}
-            </button>
-        </div>
-    `;
+        <button type="button" class="btn btn-sm btn-outline-primary ai-action-btn" data-action="attach-card" data-item-id="${Number(action.item_id)}">
+            <i class="bi bi-paperclip"></i> Attach the warranty card for ${escapeHtml(action.item_name || 'this item')}
+        </button>`;
 }
 
 function renderChatMessage(message) {
     const role = message.role === 'user' ? 'user' : 'assistant';
-    const safeContent = renderMessageContent(message.content, role);
-    const bubbleClass = role === 'user' ? 'msg-user' : 'msg-ai';
     const when = formatTime(message.created_at);
-    const actionHtml = role === 'assistant' ? renderAssistantAction(message.action) : '';
-    const rawId = String(message.id || generateLocalMessageId('msg'));
-    const domId = `msg_${rawId.replace(/[^a-zA-Z0-9_-]/g, '_')}`;
-
+    const body = renderMessageContent(message.content, role);
+    if (role === 'user') {
+        return `
+        <div class="ai-msg ai-msg-user">
+            <div class="ai-bubble">${body}</div>
+            ${when ? `<div class="ai-msg-time">${when}</div>` : ''}
+        </div>`;
+    }
     return `
-        <div class="msg-wrap ${role}" id="${domId}" data-message-id="${rawId}">
-            <div class="${bubbleClass}">
-                <div>${safeContent}</div>
-                ${actionHtml}
-                ${when ? `<div class="msg-time">${when}</div>` : ''}
+        <div class="ai-msg ai-msg-assistant${message.error ? ' is-error' : ''}">
+            <div class="ai-avatar" aria-hidden="true"><i class="bi ${message.error ? 'bi-exclamation-lg' : 'bi-stars'}"></i></div>
+            <div class="ai-msg-body">
+                <div class="ai-bubble ai-markdown">${body}</div>
+                ${renderAssistantAction(message.action)}
+                ${when ? `<div class="ai-msg-time">${when}</div>` : ''}
             </div>
-        </div>
-    `;
+        </div>`;
+}
+
+function renderChatWelcome() {
+    return `
+        <div class="ai-welcome">
+            <div class="ai-welcome-icon" aria-hidden="true"><i class="bi bi-stars"></i></div>
+            <h2 class="ai-welcome-title">How can I help?</h2>
+            <p class="ai-welcome-text">Ask about anything in your inventory: what you've spent, when warranties end, or details from a receipt.</p>
+            <div class="ai-suggestions">
+                ${CHAT_SUGGESTIONS.map(s => `
+                    <button type="button" class="ai-suggestion" data-action="chat-suggestion" data-prompt="${escapeHtml(s.text)}">
+                        <i class="bi ${s.icon}" aria-hidden="true"></i><span>${escapeHtml(s.text)}</span>
+                    </button>`).join('')}
+            </div>
+        </div>`;
 }
 
 let currentConversationId = generateConversationId();
 let activeConversationMessages = [];
 let lastConversationList = [];
 let activeConversationFilter = '';
+let chatBusy = false;
 
 function renderRecentConversationsSidebar(conversations) {
     const container = byId('recentConversations');
@@ -988,74 +1009,80 @@ function renderRecentConversationsSidebar(conversations) {
 
     const items = Array.isArray(conversations) ? conversations : [];
     if (!items.length) {
-        container.innerHTML = stateBlock('No conversations yet.');
+        container.innerHTML = `<div class="ai-conv-empty">${activeConversationFilter ? 'No chats match your search.' : 'Your chats will appear here.'}</div>`;
+        updateChatTitle();
         return;
     }
 
     const groups = {};
     items.forEach(conversation => {
-        const key = dateKey(conversation.updated_at || conversation.created_at) || 'unknown';
-        if (!groups[key]) {
-            groups[key] = {
-                label: separatorLabel(conversation.updated_at || conversation.created_at) || 'Unknown date',
-                items: []
-            };
-        }
+        const stamp = conversation.updated_at || conversation.created_at;
+        const key = dateKey(stamp) || 'unknown';
+        if (!groups[key]) groups[key] = { label: separatorLabel(stamp) || 'Earlier', items: [] };
         groups[key].items.push(conversation);
     });
 
-    const sortedKeys = Object.keys(groups).sort((a, b) => (a < b ? 1 : -1));
-    let html = '';
-
-    sortedKeys.forEach(key => {
-        html += `<div class="conv-date-group"><div class="conv-date-label">${escapeHtml(groups[key].label)}</div>`;
-        groups[key].items.forEach(item => {
-            const convId = escapeHtml(String(item.conversation_id || ''));
-            // Long text is cut with a CSS ellipsis, so keep a generous limit here.
-            const title = truncateText(item.title || 'New conversation', 200);
-            const preview = truncateText(item.preview || '', 200);
-            const isActive = item.conversation_id === currentConversationId ? 'active' : '';
-            html += `
-                <button type="button" class="conv-item w-100 text-start ${isActive}" data-action="open-conversation" data-conversation-id="${convId}">
-                    <div class="conv-preview"><strong class="conv-line">${escapeHtml(title)}</strong>${preview ? `<span class="conv-line">${escapeHtml(preview)}</span>` : ''}</div>
-                    <div class="conv-time">${formatTime(item.updated_at || item.created_at) || ''}</div>
-                </button>
-            `;
-        });
-        html += '</div>';
-    });
-
-    container.innerHTML = html;
+    container.innerHTML = Object.keys(groups).sort((a, b) => (a < b ? 1 : -1)).map(key => `
+        <div class="ai-conv-group">
+            <div class="ai-conv-label">${escapeHtml(groups[key].label)}</div>
+            ${groups[key].items.map(item => `
+                <button type="button" class="ai-conv ${item.conversation_id === currentConversationId ? 'active' : ''}"
+                        data-action="open-conversation" data-conversation-id="${escapeHtml(String(item.conversation_id || ''))}">
+                    <span class="ai-conv-title">${escapeHtml(truncateText(item.title || 'New chat', 200))}</span>
+                    <span class="ai-conv-time">${formatTime(item.updated_at || item.created_at) || ''}</span>
+                </button>`).join('')}
+        </div>`).join('');
+    updateChatTitle();
 }
 
-function renderChatThread(messages) {
-    const box = byId('chat-box');
+function updateChatTitle() {
+    const title = byId('chatTitle');
+    if (!title) return;
+    const saved = lastConversationList.find(c => c.conversation_id === currentConversationId);
+    const firstQuestion = activeConversationMessages.find(m => m.role === 'user');
+    title.textContent = (saved && saved.title) || (firstQuestion && truncateText(firstQuestion.content, 80)) || 'New chat';
+}
+
+function renderChatThread(messages, { typing = false } = {}) {
+    const box = byId('chatThread');
     if (!box) return;
 
-    if (!messages || messages.length === 0) {
-        box.innerHTML = '<div class="msg-wrap assistant"><div class="msg-ai">New conversation started. Ask me anything about your inventory.</div></div>';
-        box.scrollTop = box.scrollHeight;
+    if ((!messages || !messages.length) && !typing) {
+        box.innerHTML = renderChatWelcome();
+        updateChatTitle();
         return;
     }
 
     let html = '';
     let lastDate = '';
-
     messages.forEach(m => {
         const key = dateKey(m.created_at);
         if (key && key !== lastDate) {
-            html += `<div class="date-sep"><span>${separatorLabel(m.created_at)}</span></div>`;
+            html += `<div class="ai-date"><span>${separatorLabel(m.created_at)}</span></div>`;
             lastDate = key;
         }
         html += renderChatMessage(m);
     });
-
-    box.innerHTML = html;
+    if (typing) {
+        html += `
+        <div class="ai-msg ai-msg-assistant">
+            <div class="ai-avatar" aria-hidden="true"><i class="bi bi-stars"></i></div>
+            <div class="ai-bubble ai-typing" aria-label="The assistant is typing"><span></span><span></span><span></span></div>
+        </div>`;
+    }
+    box.innerHTML = `<div class="ai-thread-inner">${html}</div>`;
     box.scrollTop = box.scrollHeight;
+    updateChatTitle();
 }
 
 function setCurrentConversation(conversationId) {
     currentConversationId = conversationId || generateConversationId();
+}
+
+function toggleChatSidebar(open) {
+    const shell = byId('aiShell');
+    if (!shell) return;
+    shell.classList.toggle('sidebar-open', typeof open === 'boolean' ? open : !shell.classList.contains('sidebar-open'));
 }
 
 function startNewConversation() {
@@ -1063,39 +1090,33 @@ function startNewConversation() {
     activeConversationMessages = [];
     renderChatThread(activeConversationMessages);
     renderRecentConversationsSidebar(lastConversationList);
+    toggleChatSidebar(false);
+    byId('chatInput')?.focus();
 }
 
 async function loadConversationList(query = '') {
     activeConversationFilter = query || '';
-
-    const container = byId('recentConversations');
-    if (container) {
-        container.innerHTML = stateBlock('Loading conversations…');
-    }
-
     try {
         const url = query
             ? `/api/chat/conversations?limit=100&query=${encodeURIComponent(query)}`
             : '/api/chat/conversations?limit=100';
-
         const res = await fetch(url);
         const data = await res.json();
         lastConversationList = Array.isArray(data.conversations) ? data.conversations : [];
-        renderRecentConversationsSidebar(lastConversationList);
     } catch (e) {
         lastConversationList = [];
-        renderRecentConversationsSidebar([]);
     }
+    renderRecentConversationsSidebar(lastConversationList);
 }
 
 async function openConversation(conversationId) {
     if (!conversationId) return;
 
     setCurrentConversation(conversationId);
-    const box = byId('chat-box');
-    if (box) {
-        box.innerHTML = '<div class="msg-wrap assistant"><div class="msg-ai">Loading conversation...</div></div>';
-    }
+    toggleChatSidebar(false);
+    renderRecentConversationsSidebar(lastConversationList);
+    const box = byId('chatThread');
+    if (box) box.innerHTML = '<div class="ai-thread-status">Loading conversation…</div>';
 
     try {
         const res = await fetch(`/api/chat/conversations/${encodeURIComponent(conversationId)}/messages?limit=200`);
@@ -1106,32 +1127,14 @@ async function openConversation(conversationId) {
             content: m.content || '',
             created_at: m.created_at || new Date().toISOString()
         }));
-
         renderChatThread(activeConversationMessages);
-        renderRecentConversationsSidebar(lastConversationList);
     } catch (e) {
-        if (box) {
-            box.innerHTML = '<div class="msg-wrap assistant"><div class="msg-ai text-danger">Could not load conversation.</div></div>';
-        }
+        if (box) box.innerHTML = '<div class="ai-thread-status text-danger">Could not load this conversation.</div>';
     }
 }
 
-async function searchChatHistory() {
-    const input = byId('chatSearchInput');
-    if (!input) return;
-
-    const query = (input.value || '').trim();
-    await loadConversationList(query);
-}
-
-async function resetChatSearch() {
-    const input = byId('chatSearchInput');
-    if (input) input.value = '';
-    await loadConversationList('');
-}
-
 async function clearChatHistory() {
-    if (!confirm('Clear all saved chat history? This cannot be undone.')) return;
+    if (!confirm('Delete all your saved chats? This cannot be undone.')) return;
 
     try {
         const res = await fetch('/api/chat/history', { method: 'DELETE' });
@@ -1140,7 +1143,6 @@ async function clearChatHistory() {
             showToast(data.error || 'Could not clear the chat history.', 'danger');
             return;
         }
-
         lastConversationList = [];
         startNewConversation();
         await loadConversationList('');
@@ -1149,59 +1151,80 @@ async function clearChatHistory() {
     }
 }
 
-async function sendMessage() {
+function resizeChatInput() {
     const input = byId('chatInput');
     if (!input) return;
+    input.style.height = 'auto';
+    input.style.height = `${Math.min(input.scrollHeight, 180)}px`;
+    input.style.overflowY = input.scrollHeight > 180 ? 'auto' : 'hidden';
+    const send = byId('chatSendBtn');
+    if (send) send.disabled = chatBusy || !input.value.trim();
+}
 
-    const msg = input.value.trim();
+async function sendMessage(text) {
+    const input = byId('chatInput');
+    if (!input || chatBusy) return;
+
+    const msg = (typeof text === 'string' ? text : input.value).trim();
     if (!msg) return;
 
-    const nowIso = new Date().toISOString();
-    const userMessageObj = {
-        id: generateLocalMessageId('user'),
-        role: 'user',
-        content: msg,
-        created_at: nowIso
-    };
-
-    activeConversationMessages.push(userMessageObj);
-    renderChatThread(activeConversationMessages);
+    activeConversationMessages.push({ id: generateLocalMessageId('user'), role: 'user', content: msg, created_at: new Date().toISOString() });
     input.value = '';
+    chatBusy = true;
+    resizeChatInput();
+    renderChatThread(activeConversationMessages, { typing: true });
 
+    let reply;
     try {
         const res = await fetch('/api/chat', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                message: msg,
-                conversation_id: currentConversationId
-            })
+            body: JSON.stringify({ message: msg, conversation_id: currentConversationId })
         });
-        const data = await res.json();
-
-        const assistantMessageObj = {
-            id: generateLocalMessageId('assistant'),
-            role: 'assistant',
-            content: data.reply || '',
-            created_at: new Date().toISOString(),
-            action: data.action || null
-        };
-
-        activeConversationMessages.push(assistantMessageObj);
-        renderChatThread(activeConversationMessages);
-        await loadConversationList(activeConversationFilter);
+        const data = await readJsonResponse(res);
+        reply = res.ok && data.reply
+            ? { content: data.reply, action: data.action || null, error: Boolean(data.error) }
+            : { content: data.error || data.reply || 'Something went wrong. Please try again.', error: true };
     } catch (e) {
-        activeConversationMessages.push({
-            id: generateLocalMessageId('assistant'),
-            role: 'assistant',
-            content: 'Could not reach the server. Check your connection and try again.',
-            created_at: new Date().toISOString()
-        });
-        renderChatThread(activeConversationMessages);
+        reply = { content: 'Could not reach the server. Check your connection and try again.', error: true };
     }
+
+    activeConversationMessages.push({ id: generateLocalMessageId('assistant'), role: 'assistant', created_at: new Date().toISOString(), ...reply });
+    chatBusy = false;
+    renderChatThread(activeConversationMessages);
+    resizeChatInput();
+    input.focus();
+    await loadConversationList(activeConversationFilter);
+}
+
+function initAssistant() {
+    const input = byId('chatInput');
+    if (!input) return;
+    byId('chatComposer')?.addEventListener('submit', event => {
+        event.preventDefault();
+        sendMessage();
+    });
+    input.addEventListener('keydown', event => {
+        if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
+            event.preventDefault();
+            sendMessage();
+        }
+    });
+    input.addEventListener('input', resizeChatInput);
+    // On phones the chat list slides over the chat; tapping the chat closes it.
+    document.querySelector('.ai-main')?.addEventListener('click', event => {
+        if (byId('aiShell')?.classList.contains('sidebar-open') && !event.target.closest('.ai-icon-btn')) toggleChatSidebar(false);
+    });
+
+    let searchTimer;
+    byId('chatSearchInput')?.addEventListener('input', event => {
+        clearTimeout(searchTimer);
+        searchTimer = setTimeout(() => loadConversationList(event.target.value.trim()), 250);
+    });
 }
 
 async function startAssistantSession() {
+    initAssistant();
     startNewConversation();
     await loadConversationList('');
 }
@@ -1322,7 +1345,7 @@ async function saveSettings(event) {
         showToast('Settings saved.', 'success');
 
         await Promise.all([loadDashboard(), loadInventory()]);
-        if (byId('chat-box')) {
+        if (byId('chatThread')) {
             renderChatThread(activeConversationMessages);
             renderRecentConversationsSidebar(lastConversationList);
         }
@@ -1373,6 +1396,9 @@ document.addEventListener('click', (event) => {
             break;
         case 'open-conversation':
             openConversation(target.dataset.conversationId);
+            break;
+        case 'chat-suggestion':
+            sendMessage(target.dataset.prompt);
             break;
         case 'switch-workspace':
             switchWorkspace(Number(target.dataset.workspaceId));
@@ -1440,7 +1466,7 @@ window.onload = async () => {
     await loadSettings();
     await Promise.all([loadDashboard(), loadInventory()]);
     await loadSettingsIntoForm();
-    if (byId('chat-box')) {
+    if (byId('chatThread')) {
         await startAssistantSession();
     }
 };
