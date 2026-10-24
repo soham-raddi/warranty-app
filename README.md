@@ -111,13 +111,15 @@ and the `uploads/` folder.
    *Project URL* and *service_role* key from **Project Settings -> API**.
 2. **Vercel environment variables** (Project Settings -> Environment Variables, Production): `SECRET_KEY`,
    `GROQ_API_KEY`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `DATABASE_URL`, `SUPABASE_URL`,
-   `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_BUCKET=receipts`, `CRON_SECRET`, `CONTACT_EMAIL`. See `.env.example`.
+   `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_BUCKET=receipts`, `CRON_SECRET`, `CONTACT_EMAIL`, and optionally
+   `RESEND_API_KEY` and `EMAIL_FROM` for emails (see Emails below). See `.env.example`.
 3. **Google Cloud:** add `https://<your-app>.vercel.app/auth/callback` as an authorized redirect URI, then publish
    the OAuth consent screen with `https://<your-app>.vercel.app/` as the homepage and
    `https://<your-app>.vercel.app/privacy` as the privacy policy.
 4. **Existing data (optional):** with the Supabase values in your local `.env`, run
    `python scripts/migrate_to_supabase.py` (dry run) and then `python scripts/migrate_to_supabase.py --apply`.
-5. Deploy. `vercel.json` sets a 60-second function timeout and a daily clean-up job at 03:00 UTC.
+5. Deploy. `vercel.json` sets a 60-second function timeout and a daily job at 03:00 UTC that cleans up and sends
+   warranty reminder emails.
 
 On Vercel the app automatically: requires `SECRET_KEY`, uses secure cookies and HTTPS URLs, disables dev login,
 limits uploads to 4 MB (large photos are shrunk in the browser first), and serves files through short-lived
@@ -127,11 +129,26 @@ signed links.
 Anyone with a Google account can sign in. Each family gets its own private **workspace** with its own items, receipts, settings and members:
 
 1. A new person signs in and is offered to **create a workspace** (they become its owner).
-2. The owner (or an admin) invites a family member from **Settings → Workspace & Members** by entering their email. This creates a personal **invite link** to send them (WhatsApp, text, email; the app does not send emails itself).
-3. Opening the link shows who invited them; after signing in with **any** Google account they click **Join**. Links work once and expire after 7 days; "New link" replaces a lost link and "Revoke" cancels it. If they sign in with the exact email that was invited, they also join automatically.
+2. The owner (or an admin) invites a family member from **Settings → Workspace & Members** by entering their email. This creates a personal **invite link**, which the app emails to them when email is set up (see below); it can also be copied and shared on WhatsApp or text.
+3. Opening the link shows who invited them; after signing in with **any** Google account they click **Join**. Links work once and expire after 7 days; "Email again" or "New link" replaces a lost link and "Revoke" cancels it. If they sign in with the exact email that was invited, they also join automatically.
 4. Someone can belong to several workspaces and switch between them from the menu in the top-right corner.
 
 Roles: **Owner** (everything, including renaming the workspace and adding admins), **Admin** (delete items, change settings, invite members), **Member** (view, upload receipts, chat). Chat history is private to each person, even inside a shared workspace.
+
+### Emails
+Emails are sent through [Resend](https://resend.com), set up once for the whole site, so families never configure anything.
+Set `RESEND_API_KEY` (and `EMAIL_FROM`) to turn on:
+
+- **Emailed invites:** "Email the invite to them" when inviting, and "Email again" on pending invites.
+- **Warranty reminders:** in **Settings → Alerts & reminders**, an owner or admin turns on reminders and picks the window
+  (30 days by default). The daily job emails each workspace's members (or the chosen recipients) when a warranty enters
+  the window, then again 7 days and 1 day before it ends. Each reminder is sent once. "Send reminders now" emails the
+  current list right away.
+
+Resend only delivers to other people's inboxes from a **domain you have verified** in Resend. Until then, the default
+`onboarding@resend.dev` sender can only email the address of your own Resend account.
+
+Without `RESEND_API_KEY`, the email options are hidden and invite links are shared by hand.
 
 Upgrading from a version without workspaces is automatic: existing data becomes the first workspace, owned by `OWNER_EMAIL` (or the previous owner).
 

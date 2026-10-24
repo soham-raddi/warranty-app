@@ -11,12 +11,6 @@ const appSettings = {
     reminders_enabled: '0',
     reminder_days_before: '30',
     reminder_recipients: '',
-    reminder_subject: 'Warranty expiry reminder',
-    reminder_body: 'Your warranty for {{item_name}} expires on {{expiry_date}}. Days left: {{days_remaining}}.',
-    smtp_host: '',
-    smtp_port: '587',
-    smtp_username: '',
-    smtp_sender_email: '',
     theme_mode: 'system',
     accent_color: 'blue',
     date_format: 'auto',
@@ -655,6 +649,7 @@ async function attachWarrantyCard(id) {
         const formData = new FormData();
         formData.append('warranty_card', file);
 
+        showToast('Uploading and reading the warranty card…', 'info');
         try {
             const res = await fetch(`/api/inventory/${id}/attach-warranty-card`, {
                 method: 'POST',
@@ -665,7 +660,7 @@ async function attachWarrantyCard(id) {
                 showToast(data.error || 'Failed to attach warranty card.', 'danger');
                 return;
             }
-            showToast('Warranty card attached.', 'success');
+            showToast(data.message || 'Warranty card attached.', data.card_read ? 'success' : 'warning');
             await Promise.all([loadInventory(), loadDashboard()]);
         } catch (e) {
             showToast('Failed to upload warranty card.', 'danger');
@@ -1031,12 +1026,6 @@ async function loadSettings() {
         appSettings.reminders_enabled = settings.reminders_enabled || appSettings.reminders_enabled;
         appSettings.reminder_days_before = settings.reminder_days_before || appSettings.reminder_days_before;
         appSettings.reminder_recipients = settings.reminder_recipients || appSettings.reminder_recipients;
-        appSettings.reminder_subject = settings.reminder_subject || appSettings.reminder_subject;
-        appSettings.reminder_body = settings.reminder_body || appSettings.reminder_body;
-        appSettings.smtp_host = settings.smtp_host || appSettings.smtp_host;
-        appSettings.smtp_port = settings.smtp_port || appSettings.smtp_port;
-        appSettings.smtp_username = settings.smtp_username || appSettings.smtp_username;
-        appSettings.smtp_sender_email = settings.smtp_sender_email || appSettings.smtp_sender_email;
         appSettings.theme_mode = settings.theme_mode || appSettings.theme_mode;
         appSettings.accent_color = settings.accent_color || appSettings.accent_color;
         appSettings.date_format = settings.date_format || appSettings.date_format;
@@ -1060,12 +1049,6 @@ async function loadSettingsIntoForm() {
     const remindersEnabledInput = byId('settingsRemindersEnabled');
     const reminderDaysInput = byId('settingsReminderDaysBefore');
     const reminderRecipientsInput = byId('settingsReminderRecipients');
-    const reminderSubjectInput = byId('settingsReminderSubject');
-    const reminderBodyInput = byId('settingsReminderBody');
-    const smtpHostInput = byId('settingsSmtpHost');
-    const smtpPortInput = byId('settingsSmtpPort');
-    const smtpUsernameInput = byId('settingsSmtpUsername');
-    const smtpSenderInput = byId('settingsSmtpSenderEmail');
     const themeInput = byId('settingsThemeMode');
     const accentInput = byId('settingsAccentColor');
     const dateFormatInput = byId('settingsDateFormat');
@@ -1080,12 +1063,6 @@ async function loadSettingsIntoForm() {
     if (remindersEnabledInput) remindersEnabledInput.checked = isTruthySetting(appSettings.reminders_enabled);
     if (reminderDaysInput) reminderDaysInput.value = appSettings.reminder_days_before || '30';
     if (reminderRecipientsInput) reminderRecipientsInput.value = appSettings.reminder_recipients || '';
-    if (reminderSubjectInput) reminderSubjectInput.value = appSettings.reminder_subject || 'Warranty expiry reminder';
-    if (reminderBodyInput) reminderBodyInput.value = appSettings.reminder_body || '';
-    if (smtpHostInput) smtpHostInput.value = appSettings.smtp_host || '';
-    if (smtpPortInput) smtpPortInput.value = appSettings.smtp_port || '587';
-    if (smtpUsernameInput) smtpUsernameInput.value = appSettings.smtp_username || '';
-    if (smtpSenderInput) smtpSenderInput.value = appSettings.smtp_sender_email || '';
     if (themeInput) themeInput.value = appSettings.theme_mode || 'system';
     if (accentInput) accentInput.value = appSettings.accent_color || 'blue';
     if (dateFormatInput) dateFormatInput.value = appSettings.date_format || 'auto';
@@ -1106,12 +1083,6 @@ async function saveSettings(event) {
     const remindersEnabledInput = byId('settingsRemindersEnabled');
     const reminderDaysInput = byId('settingsReminderDaysBefore');
     const reminderRecipientsInput = byId('settingsReminderRecipients');
-    const reminderSubjectInput = byId('settingsReminderSubject');
-    const reminderBodyInput = byId('settingsReminderBody');
-    const smtpHostInput = byId('settingsSmtpHost');
-    const smtpPortInput = byId('settingsSmtpPort');
-    const smtpUsernameInput = byId('settingsSmtpUsername');
-    const smtpSenderInput = byId('settingsSmtpSenderEmail');
     const themeInput = byId('settingsThemeMode');
     const accentInput = byId('settingsAccentColor');
     const dateFormatInput = byId('settingsDateFormat');
@@ -1128,12 +1099,6 @@ async function saveSettings(event) {
         reminders_enabled: remindersEnabledInput && remindersEnabledInput.checked ? '1' : '0',
         reminder_days_before: reminderDaysInput ? Number(reminderDaysInput.value || 30) : 30,
         reminder_recipients: reminderRecipientsInput ? reminderRecipientsInput.value.trim() : '',
-        reminder_subject: reminderSubjectInput ? reminderSubjectInput.value.trim() : 'Warranty expiry reminder',
-        reminder_body: reminderBodyInput ? reminderBodyInput.value.trim() : '',
-        smtp_host: smtpHostInput ? smtpHostInput.value.trim() : '',
-        smtp_port: smtpPortInput ? smtpPortInput.value.trim() : '587',
-        smtp_username: smtpUsernameInput ? smtpUsernameInput.value.trim() : '',
-        smtp_sender_email: smtpSenderInput ? smtpSenderInput.value.trim() : '',
         theme_mode: themeInput ? themeInput.value : 'system',
         accent_color: accentInput ? accentInput.value : 'blue',
         date_format: dateFormatInput ? dateFormatInput.value : 'auto',
@@ -1175,12 +1140,12 @@ async function sendReminderEmailsNow() {
     showToast('Sending reminder emails...', 'info');
     try {
         const res = await fetch('/api/reminders/send', { method: 'POST' });
-        const data = await res.json();
+        const data = await readJsonResponse(res);
         if (!res.ok) {
             showToast(data.error || 'Failed to send reminder emails.', 'danger');
             return;
         }
-        showToast(data.sent ? `Reminder email sent to ${data.sent} recipient(s).` : (data.message || 'Nothing to send.'), 'success');
+        showToast(data.message || 'Reminder emails sent.', data.sent ? 'success' : 'info');
     } catch (e) {
         showToast('Failed to send reminder emails.', 'danger');
     }

@@ -6,6 +6,7 @@ from werkzeug.utils import secure_filename
 import storage
 from database import (
     add_service_history_entry,
+    apply_warranty_card_details,
     delete_appliance,
     find_duplicate_receipt,
     get_appliance,
@@ -17,7 +18,7 @@ from database import (
     update_appliance,
     update_warranty_card,
 )
-from llm_extractor import parse_receipt_image_to_json
+from llm_extractor import parse_receipt_image_to_json, parse_warranty_card
 from ratelimit import limit
 from .auth import role_required
 
@@ -192,8 +193,9 @@ def attach_warranty_card(item_id):
         return jsonify({"error": "Inventory item not found"}), 404
 
     _, previous_card_path = get_appliance_file_paths(g.workspace_id, item_id)
+    data = file.read()
     try:
-        ref = storage.save(file.read(), _storage_key(file.filename, 'warranty_cards'), file.mimetype)
+        ref = storage.save(data, _storage_key(file.filename, 'warranty_cards'), file.mimetype)
     except storage.StorageError:
         return jsonify({"error": "Could not store the warranty card. Please try again."}), 502
 
@@ -205,7 +207,24 @@ def attach_warranty_card(item_id):
     if previous_card_path and previous_card_path != ref:
         storage.delete(previous_card_path)
 
-    return jsonify({"message": "Warranty card attached successfully"})
+    # Read the card so the item uses its real warranty length instead of the workspace default.
+    card = parse_warranty_card(data, file.filename)
+    if card.get('error'):
+        return jsonify({"message": "Warranty card attached, but it couldn't be read. "
+                                   "You can set the warranty length with Edit.", "card_read": False})
+    changes = apply_warranty_card_details(g.workspace_id, item_id, months=card['warranty_months'],
+                                          start_date=card['warranty_start_date'], notes=card['coverage_notes'])
+    if 'warranty_months' not in changes:
+        return jsonify({"message": "Warranty card attached, but no warranty length was found on it. "
+                                   "The default period is still used; you can change it with Edit.",
+                        "card_read": False})
+
+    item = next((i for i in get_inventory_analytics(g.workspace_id)[0] if i['id'] == item_id), {})
+    months = changes['warranty_months']
+    length = f"{months // 12}-year" if months % 12 == 0 else f"{months}-month"
+    expiry = f", now valid until {item['warranty_expires_on']}" if item.get('warranty_expires_on') else ''
+    return jsonify({"message": f"Warranty card read: {length} warranty{expiry}.", "card_read": True,
+                    "warranty_months": months, "warranty_expires_on": item.get('warranty_expires_on')})
 
 
 @receipts_bp.route('/api/inventory/<int:item_id>/service-history', methods=['GET'])

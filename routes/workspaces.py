@@ -6,6 +6,7 @@ from datetime import datetime
 
 from flask import Blueprint, Response, g, jsonify, redirect, render_template, request, session, url_for
 
+import emails
 import storage
 
 from database import (
@@ -21,6 +22,7 @@ from database import (
     get_invite_by_token,
     get_membership_role,
     get_user_workspaces,
+    get_workspace,
     list_invites,
     list_workspace_members,
     regenerate_invite_token,
@@ -59,6 +61,20 @@ def nice_date(value):
 
 def _invite_link(token):
     return url_for('workspaces.join_page', token=token, _external=True)
+
+
+def _email_invite(email, link, expires_at):
+    """Emails an invite link. Returns None when sent, or an error message to show instead."""
+    if not emails.EMAIL_ENABLED:
+        return "Email isn't set up on this site, so share the link yourself."
+    inviter = g.current_user.get('name') or g.current_user['email']
+    workspace = get_workspace(g.workspace_id) or {'name': 'their workspace'}
+    subject, html_body, text_body = emails.invite_email(inviter, workspace['name'], link, nice_date(expires_at))
+    try:
+        emails.send_email(email, subject, html_body, text_body)
+    except emails.EmailError as error:
+        return f'{error} You can still share the link below yourself.'
+    return None
 
 
 def _default_workspace_name(user):
@@ -165,10 +181,19 @@ def invite_member():
     if error:
         return jsonify({'error': error}), 400
     token = invite.pop('token')
+    link = _invite_link(token)
+    email_error = None
+    if payload.get('send_email'):
+        email_error = _email_invite(email, link, invite['expires_at'])
+    if payload.get('send_email') and not email_error:
+        message = f'Invite emailed to {email}. You can also share the link below.'
+    else:
+        message = email_error or f'Invite created for {email}. Send them the link below.'
     return jsonify({
-        'message': f'Invite created for {email}. Send them the link below.',
+        'message': message,
         'invite': invite,
-        'link': _invite_link(token),
+        'link': link,
+        'email_sent': bool(payload.get('send_email')) and not email_error,
     }), 201
 
 
@@ -183,6 +208,23 @@ def new_invite_link(invite_id):
     token, expires_at = result
     return jsonify({'link': _invite_link(token), 'expires_at': expires_at,
                     'message': 'New invite link created. The previous link no longer works.'})
+
+
+@workspaces_bp.route('/api/workspace/invites/<int:invite_id>/email', methods=['POST'])
+@role_required('owner', 'admin')
+@limit('invite', per_workspace=True, hourly=30, daily=100)
+def email_invite_again(invite_id):
+    invite = next((i for i in list_invites(g.workspace_id) if i['id'] == invite_id), None)
+    result = regenerate_invite_token(g.workspace_id, invite_id) if invite else None
+    if not result:
+        return jsonify({'error': 'Invite not found'}), 404
+    token, expires_at = result
+    link = _invite_link(token)
+    email_error = _email_invite(invite['email'], link, expires_at)
+    if email_error:
+        return jsonify({'error': email_error, 'link': link}), 502
+    return jsonify({'message': f"Invite emailed to {invite['email']} again. Older links no longer work.",
+                    'link': link, 'expires_at': expires_at})
 
 
 @workspaces_bp.route('/api/workspace/invites/<int:invite_id>', methods=['DELETE'])

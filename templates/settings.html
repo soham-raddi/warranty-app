@@ -22,14 +22,8 @@
             </button>
             <button class="settings-tab" id="tab-alerts-btn" data-bs-toggle="pill" data-bs-target="#tab-alerts" data-tab="alerts" type="button" role="tab" aria-controls="tab-alerts" aria-selected="false">
                 <i class="bi bi-bell"></i>
-                <span><strong>Alerts & reminders</strong><small>{{ 'Expiry warnings, emails' if email_reminders_available else 'Expiry warnings' }}</small></span>
+                <span><strong>Alerts & reminders</strong><small>{{ 'Expiry warnings, emails' if email_enabled else 'Expiry warnings' }}</small></span>
             </button>
-            {% if email_reminders_available %}
-            <button class="settings-tab" id="tab-email-btn" data-bs-toggle="pill" data-bs-target="#tab-email" data-tab="email" type="button" role="tab" aria-controls="tab-email" aria-selected="false">
-                <i class="bi bi-envelope-at"></i>
-                <span><strong>Email delivery</strong><small>SMTP server details</small></span>
-            </button>
-            {% endif %}
             <button class="settings-tab" id="tab-workspace-btn" data-bs-toggle="pill" data-bs-target="#tab-workspace" data-tab="workspace" type="button" role="tab" aria-controls="tab-workspace" aria-selected="false">
                 <i class="bi bi-people"></i>
                 <span><strong>Workspace & members</strong><small>Name, people, invites</small></span>
@@ -190,7 +184,7 @@
                     <fieldset class="settings-pane" data-settings-pane {% if not can_edit %}disabled{% endif %}>
                         <header class="settings-pane-header">
                             <h2 class="settings-pane-title">Alerts & reminders</h2>
-                            <p class="settings-group-note mb-0">When items show up under Needs Attention{{ ', and who gets warranty expiry emails' if email_reminders_available }}.</p>
+                            <p class="settings-group-note mb-0">When items show up under Needs Attention{{ ', and who gets warranty expiry emails' if email_enabled }}.</p>
                         </header>
 
                         <div class="settings-group">
@@ -204,7 +198,7 @@
                             </div>
                         </div>
 
-                        {% if email_reminders_available %}
+                        {% if email_enabled %}
                         <div class="settings-group">
                             <h3 class="settings-group-title mb-3">Reminder emails</h3>
                             <div class="row g-3">
@@ -212,35 +206,26 @@
                                     <label class="settings-toggle">
                                         <input id="settingsRemindersEnabled" type="checkbox">
                                         <span>
-                                            <strong>Enable reminder emails</strong>
-                                            <small>Saves your preference. Emails are sent when you click "Send reminders now".</small>
+                                            <strong>Email me before warranties expire</strong>
+                                            <small>Sent automatically each morning: when a warranty enters the reminder window, then 7 days and 1 day before it ends.</small>
                                         </span>
                                     </label>
                                 </div>
                                 <div class="col-md-6">
                                     <label class="form-label fw-semibold" for="settingsReminderDaysBefore">Reminder window (days)</label>
-                                    <input id="settingsReminderDaysBefore" type="number" min="0" max="3650" class="form-control" placeholder="30">
-                                    <div class="form-text">Emails list active warranties ending within this many days.</div>
+                                    <input id="settingsReminderDaysBefore" type="number" min="1" max="3650" class="form-control" placeholder="30">
+                                    <div class="form-text">The first reminder goes out this many days before a warranty ends.</div>
                                 </div>
                                 <div class="col-12">
-                                    <label class="form-label fw-semibold" for="settingsReminderRecipients">Recipients</label>
-                                    <input id="settingsReminderRecipients" type="text" class="form-control" placeholder="you@example.com, family@example.com">
-                                    <div class="form-text">Separate multiple addresses with commas.</div>
-                                </div>
-                                <div class="col-12">
-                                    <label class="form-label fw-semibold" for="settingsReminderSubject">Email subject</label>
-                                    <input id="settingsReminderSubject" type="text" class="form-control" maxlength="200">
-                                </div>
-                                <div class="col-12">
-                                    <label class="form-label fw-semibold" for="settingsReminderBody">Line per item</label>
-                                    <textarea id="settingsReminderBody" class="form-control" rows="2" maxlength="1000"></textarea>
-                                    <div class="form-text">Placeholders: <code>{{ '{{item_name}}' }}</code>, <code>{{ '{{brand}}' }}</code>, <code>{{ '{{expiry_date}}' }}</code>, <code>{{ '{{days_remaining}}' }}</code></div>
+                                    <label class="form-label fw-semibold" for="settingsReminderRecipients">Recipients <span class="text-muted fw-normal">(optional)</span></label>
+                                    <input id="settingsReminderRecipients" type="text" class="form-control" placeholder="Everyone in this workspace">
+                                    <div class="form-text">Leave empty to email every member, or list addresses separated by commas.</div>
                                 </div>
                             </div>
                             {% if can_edit %}
                             <div class="d-flex flex-wrap align-items-center gap-2 mt-3">
                                 <button type="button" class="btn btn-outline-primary" onclick="sendReminderEmailsNow()"><i class="bi bi-envelope"></i> Send reminders now</button>
-                                <span class="small text-muted">Uses the saved settings and the details in Email delivery.</span>
+                                <span class="small text-muted">Emails every warranty in the window right away, using the saved settings.</span>
                             </div>
                             {% endif %}
                         </div>
@@ -250,46 +235,6 @@
                     </fieldset>
                 </div>
             </section>
-
-            <!-- Email delivery -->
-            {% if email_reminders_available %}
-            <section class="tab-pane fade" id="tab-email" role="tabpanel" aria-labelledby="tab-email-btn" tabindex="0">
-                <div class="card section-card shadow-sm">
-                    <fieldset class="settings-pane" data-settings-pane {% if not can_edit %}disabled{% endif %}>
-                        <header class="settings-pane-header">
-                            <h2 class="settings-pane-title">Email delivery</h2>
-                            <p class="settings-group-note mb-0">The mail server used to send reminder emails.</p>
-                        </header>
-
-                        <div class="settings-group">
-                            <div class="row g-3">
-                                <div class="col-md-8">
-                                    <label class="form-label fw-semibold" for="settingsSmtpHost">SMTP host</label>
-                                    <input id="settingsSmtpHost" type="text" class="form-control" placeholder="smtp.gmail.com">
-                                </div>
-                                <div class="col-md-4">
-                                    <label class="form-label fw-semibold" for="settingsSmtpPort">SMTP port</label>
-                                    <input id="settingsSmtpPort" type="number" min="1" max="65535" class="form-control" placeholder="587">
-                                </div>
-                                <div class="col-md-6">
-                                    <label class="form-label fw-semibold" for="settingsSmtpUsername">SMTP username</label>
-                                    <input id="settingsSmtpUsername" type="text" class="form-control" autocomplete="off">
-                                </div>
-                                <div class="col-md-6">
-                                    <label class="form-label fw-semibold" for="settingsSmtpSenderEmail">Sender email</label>
-                                    <input id="settingsSmtpSenderEmail" type="email" class="form-control" placeholder="Defaults to the username">
-                                </div>
-                            </div>
-                            <div class="settings-help-box mt-3 small">
-                                <i class="bi bi-shield-lock me-1"></i>
-                                The SMTP password is never stored here. It is read from <code>WARRANTY_SMTP_PASSWORD</code> in the server's <code>.env</code> file.
-                            </div>
-                        </div>
-                    </fieldset>
-                </div>
-            </section>
-
-            {% endif %}
 
             <!-- Workspace & members -->
             <section class="tab-pane fade" id="tab-workspace" role="tabpanel" aria-labelledby="tab-workspace-btn" tabindex="0">
@@ -329,7 +274,7 @@
                         {% if current_role in ('owner', 'admin') %}
                         <div class="border-top pt-4 mt-3">
                             <h6 class="fw-bold mb-1"><i class="bi bi-person-plus-fill me-1 text-primary"></i> Invite a family member</h6>
-                            <p class="small text-muted mb-3">Enter their email to create a personal invite link, then send the link to them (WhatsApp, text, email). They can join with any Google account.</p>
+                            <p class="small text-muted mb-3">{% if email_enabled %}Enter their email and we'll email them a personal invite link. You can also copy the link and share it yourself.{% else %}Enter their email to create a personal invite link, then send the link to them (WhatsApp, text, email).{% endif %} They can join with any Google account.</p>
                             <form id="inviteMemberForm" class="row g-2 align-items-center">
                                 <div class="col-sm-6">
                                     <input type="email" id="inviteEmail" class="form-control" placeholder="family.member@gmail.com" required>
@@ -343,6 +288,14 @@
                                 <div class="col-sm-3">
                                     <button type="submit" class="btn btn-primary w-100"><i class="bi bi-send me-1"></i> Invite</button>
                                 </div>
+                                {% if email_enabled %}
+                                <div class="col-12">
+                                    <div class="form-check">
+                                        <input class="form-check-input" type="checkbox" id="inviteSendEmail" checked>
+                                        <label class="form-check-label small" for="inviteSendEmail">Email the invite to them</label>
+                                    </div>
+                                </div>
+                                {% endif %}
                             </form>
                             <div id="inviteLinkBox" class="invite-link-box mt-3 d-none" role="status">
                                 <div class="small fw-semibold mb-2" id="inviteLinkTitle">Invite link</div>
@@ -430,6 +383,7 @@
 {% block scripts %}
 <script>
 const ROLE_BADGES = { owner: 'bg-primary', admin: 'text-bg-info', member: 'bg-secondary' };
+const EMAIL_ENABLED = {{ 'true' if email_enabled else 'false' }};
 
 async function loadWorkspaceUsers() {
     const tbody = document.getElementById('workspaceUsersTableBody');
@@ -493,6 +447,7 @@ function renderPendingInvites(invites) {
         <li class="list-group-item d-flex flex-wrap align-items-center justify-content-between gap-2">
             <span><i class="bi bi-envelope me-2 text-muted"></i>${escapeHtml(inv.email)} <span class="badge ${ROLE_BADGES[inv.role] || 'bg-secondary'} ms-1">${escapeHtml(inv.role)}</span>${status}</span>
             <span class="d-flex gap-2">
+                ${EMAIL_ENABLED ? `<button class="btn btn-sm btn-outline-primary" data-member-action="email-again" data-invite-id="${Number(inv.id)}" data-invite-email="${escapeHtml(inv.email)}"><i class="bi bi-envelope"></i> Email again</button>` : ''}
                 <button class="btn btn-sm btn-outline-primary" data-member-action="new-link" data-invite-id="${Number(inv.id)}" data-invite-email="${escapeHtml(inv.email)}"><i class="bi bi-link-45deg"></i> New link</button>
                 <button class="btn btn-sm btn-outline-secondary" data-member-action="revoke" data-invite-id="${Number(inv.id)}">Revoke</button>
             </span>
@@ -500,14 +455,15 @@ function renderPendingInvites(invites) {
     }).join('');
 }
 
-function showInviteLink(email, link, expiresAt) {
+function showInviteLink(email, link, expiresAt, emailed = false) {
     const box = document.getElementById('inviteLinkBox');
     if (!box) return;
     document.getElementById('inviteLinkTitle').textContent = `Invite link for ${email}`;
     document.getElementById('inviteLinkInput').value = link;
     const expiry = expiresAt ? formatPlainDate(expiresAt.slice(0, 10)) : '';
     document.getElementById('inviteLinkNote').textContent =
-        `Send this to ${email}. It works once${expiry ? ` and expires on ${expiry}` : ''}. ` +
+        `${emailed ? `We emailed this to ${email}; you can also share it yourself.` : `Send this to ${email}.`} ` +
+        `It works once${expiry ? ` and expires on ${expiry}` : ''}. ` +
         'For security it is only shown now; use "New link" if you lose it.';
     box.classList.remove('d-none');
     box.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
@@ -548,6 +504,10 @@ document.addEventListener('click', async (event) => {
             const data = await sendJson(`/api/workspace/invites/${Number(button.dataset.inviteId)}/link`, 'POST');
             showInviteLink(button.dataset.inviteEmail, data.link, data.expires_at);
             showToast(data.message, 'success');
+        } else if (button.dataset.memberAction === 'email-again') {
+            button.disabled = true;
+            const data = await sendJson(`/api/workspace/invites/${Number(button.dataset.inviteId)}/email`, 'POST');
+            showToast(data.message, 'success');
         } else if (button.dataset.memberAction === 'revoke') {
             const data = await sendJson(`/api/workspace/invites/${Number(button.dataset.inviteId)}`, 'DELETE');
             showToast(data.message, 'success');
@@ -564,10 +524,11 @@ document.getElementById('inviteMemberForm')?.addEventListener('submit', async (e
     try {
         const data = await sendJson('/api/workspace/invites', 'POST', {
             email: emailInput.value.trim(),
-            role: document.getElementById('inviteRole').value
+            role: document.getElementById('inviteRole').value,
+            send_email: Boolean(document.getElementById('inviteSendEmail')?.checked)
         });
-        showInviteLink(data.invite.email, data.link, data.invite.expires_at);
-        showToast(data.message, 'success');
+        showInviteLink(data.invite.email, data.link, data.invite.expires_at, data.email_sent);
+        showToast(data.message, data.email_sent === false && document.getElementById('inviteSendEmail')?.checked ? 'warning' : 'success');
         emailInput.value = '';
         loadWorkspaceUsers();
     } catch (e) {

@@ -164,3 +164,67 @@ def parse_receipt_image_to_json(data, filename):
     if not data["item_name"]:
         return {"error": "Couldn't identify the purchased item on this document."}
     return data
+
+
+def _clean_card_data(raw):
+    """Keeps a sensible warranty length, a valid start date and short notes from a warranty card reading."""
+    try:
+        months = int(float(raw.get("warranty_months")))
+        months = months if 1 <= months <= 360 else None
+    except (TypeError, ValueError):
+        months = None
+
+    start_date = str(raw.get("warranty_start_date") or "").strip()
+    try:
+        datetime.strptime(start_date, "%Y-%m-%d")
+    except ValueError:
+        start_date = None
+
+    notes = str(raw.get("coverage_notes") or "").strip()
+    if notes.lower() in MISSING_VALUE_MARKERS:
+        notes = None
+    return {"warranty_months": months, "warranty_start_date": start_date, "coverage_notes": notes}
+
+
+def parse_warranty_card(data, filename):
+    """Reads a warranty card or certificate. Returns warranty_months, warranty_start_date and coverage_notes
+    (each may be None), or {"error": ...} when the file can't be read."""
+    try:
+        image_list = encode_image(data, filename)
+    except Exception as e:
+        return {"error": f"Failed to read file: {e}"}
+
+    prompt = (
+        "This is a product warranty card, warranty certificate or guarantee document.\n"
+        "Extract:\n"
+        "- warranty_months: the total standard warranty length for the main product as a whole number of months "
+        "(e.g. 24 for '2 years'). If parts differ (e.g. '1 year on product, 10 years on motor'), use the main "
+        "product's warranty, not the longest part.\n"
+        "- warranty_start_date: the date the warranty starts or the purchase/installation date written on the card, "
+        "as YYYY-MM-DD; null if not written.\n"
+        "- coverage_notes: one short sentence summarising what is covered, including any longer coverage on specific "
+        "parts (e.g. '2 years comprehensive, 10 years on compressor'); null if nothing useful.\n"
+        "Use null for anything not on the document; never guess.\n"
+        "Return ONLY valid JSON with exactly these keys."
+    )
+    content_payload = [{"type": "text", "text": prompt}]
+    for base64_image, mime_type in image_list:
+        content_payload.append({"type": "image_url", "image_url": {"url": f"data:{mime_type};base64,{base64_image}"}})
+
+    try:
+        chat_completion = get_client().chat.completions.create(
+            model=VISION_MODEL,
+            messages=[{"role": "user", "content": content_payload}],
+            temperature=0.1,
+            response_format={"type": "json_object"},
+        )
+        raw = json.loads(chat_completion.choices[0].message.content.strip())
+    except RuntimeError as e:
+        return {"error": str(e)}
+    except Exception as e:
+        print(f"Groq warranty card error: {e}")
+        return {"error": "The AI service could not read this warranty card."}
+
+    if not isinstance(raw, dict):
+        return {"error": "The AI returned an unexpected response."}
+    return _clean_card_data(raw)

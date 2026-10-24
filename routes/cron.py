@@ -1,15 +1,17 @@
 """Scheduled jobs, triggered by Vercel Cron (see vercel.json).
 
 Vercel calls these with "Authorization: Bearer <CRON_SECRET>" when the CRON_SECRET environment variable is
-set, so nobody else can trigger them. Warranty reminder emails will be added here once an email provider
-is configured.
+set, so nobody else can trigger them. The daily job also emails warranty reminders for every workspace that
+turned them on, when RESEND_API_KEY is set.
 """
 import hmac
 import os
 
 from flask import Blueprint, jsonify, request
 
-from database import prune_old_invites, prune_rate_limits
+import emails
+import reminders
+from database import prune_old_invites, prune_rate_limits, workspaces_with_reminders_enabled
 
 cron_bp = Blueprint('cron', __name__)
 
@@ -27,4 +29,20 @@ def daily():
     return jsonify({
         'rate_limit_rows_removed': prune_rate_limits(),
         'old_invites_removed': prune_old_invites(),
+        'reminders': _send_due_reminders(),
     })
+
+
+def _send_due_reminders():
+    summary = {'emails_sent': 0, 'workspaces_failed': 0}
+    if not emails.EMAIL_ENABLED:
+        return summary
+    for workspace_id in workspaces_with_reminders_enabled():
+        try:
+            if reminders.send_workspace_reminders(workspace_id, request.url_root)['sent']:
+                summary['emails_sent'] += 1
+        except emails.EmailError as error:
+            # One family's bad address must not stop reminders for everyone else.
+            print(f'Reminder email failed for workspace {workspace_id}: {error}')
+            summary['workspaces_failed'] += 1
+    return summary

@@ -125,12 +125,6 @@ DEFAULT_SETTINGS = {
     'reminders_enabled': '0',
     'reminder_days_before': '30',
     'reminder_recipients': '',
-    'reminder_subject': 'Warranty expiry reminder',
-    'reminder_body': 'Your warranty for {{item_name}} expires on {{expiry_date}}. Days left: {{days_remaining}}.',
-    'smtp_host': '',
-    'smtp_port': '587',
-    'smtp_username': '',
-    'smtp_sender_email': ''
 }
 
 WORKSPACE_ROLES = ('owner', 'admin', 'member')
@@ -238,6 +232,17 @@ def _schema_statements():
             hits INTEGER NOT NULL DEFAULT 0,
             PRIMARY KEY (bucket, window_start)
         )''',
+        # Which warranty reminder (e.g. "30 days before") was already emailed for which item.
+        f'''CREATE TABLE IF NOT EXISTS reminder_log (
+            item_id INTEGER NOT NULL,
+            threshold_days INTEGER NOT NULL,
+            sent_at TEXT NOT NULL DEFAULT ({now}),
+            PRIMARY KEY (item_id, threshold_days)
+        )''',
+        '''CREATE TABLE IF NOT EXISTS schema_meta (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        )''',
     ]
 
 
@@ -258,21 +263,27 @@ def _add_sqlite_column(table, column_sql):
         pass  # column already exists
 
 
+# Columns added after their table was first created. When adding one here, also add it to the CREATE TABLE
+# above and bump SCHEMA_VERSION so existing databases (including the live Postgres one) get it on next start.
+_ADDED_COLUMNS = [
+    ('chat_messages', "conversation_id TEXT NOT NULL DEFAULT ''"),
+    ('appliances_v5', 'has_warranty_card INTEGER DEFAULT 0'),
+    ('appliances_v5', 'warranty_card_path TEXT'),
+    ('appliances_v5', 'workspace_id INTEGER'),
+    ('appliances_v5', 'warranty_months INTEGER'),
+    ('chat_messages', 'workspace_id INTEGER'),
+    ('chat_messages', 'user_id INTEGER'),
+    ('workspace_invites', 'token_hash TEXT'),
+    ('workspace_invites', 'expires_at TEXT'),
+    ('workspace_invites', 'accepted_at TEXT'),
+    ('workspace_invites', 'accepted_by INTEGER'),
+]
+SCHEMA_VERSION = '2'
+
+
 def _upgrade_old_sqlite_install():
     """Brings SQLite databases created by earlier versions of the app up to the current schema."""
-    for table, column in [
-        ('chat_messages', "conversation_id TEXT NOT NULL DEFAULT ''"),
-        ('appliances_v5', 'has_warranty_card INTEGER DEFAULT 0'),
-        ('appliances_v5', 'warranty_card_path TEXT'),
-        ('appliances_v5', 'workspace_id INTEGER'),
-        ('appliances_v5', 'warranty_months INTEGER'),
-        ('chat_messages', 'workspace_id INTEGER'),
-        ('chat_messages', 'user_id INTEGER'),
-        ('workspace_invites', 'token_hash TEXT'),
-        ('workspace_invites', 'expires_at TEXT'),
-        ('workspace_invites', 'accepted_at TEXT'),
-        ('workspace_invites', 'accepted_by INTEGER'),
-    ]:
+    for table, column in _ADDED_COLUMNS:
         _add_sqlite_column(table, column)
 
     cursor.execute("UPDATE chat_messages SET conversation_id = 'legacy' WHERE conversation_id IS NULL OR conversation_id = ''")
@@ -299,34 +310,38 @@ _TEXT_COLUMNS = ('item_name', 'brand', 'model_number', 'serial_number', 'categor
                  'warranty_info', 'return_policy', 'invoice_number')
 
 
-_ALL_TABLES = ('appliances_v5', 'chat_messages', 'service_history', 'app_settings', 'users', 'workspaces',
-               'workspace_members', 'workspace_invites', 'workspace_settings', 'rate_limits')
-
-
-def _postgres_schema_exists():
-    """One quick query instead of a dozen CREATE statements on every serverless cold start."""
-    cursor.execute(
-        'SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = current_schema() AND table_name IN ({})'
-        .format(', '.join('?' for _ in _ALL_TABLES)),
-        _ALL_TABLES
-    )
-    exists = cursor.fetchone()[0] == len(_ALL_TABLES)
+def _postgres_schema_is_current():
+    """One quick query instead of a dozen schema statements on every serverless cold start."""
+    cursor.execute("SELECT to_regclass('schema_meta') IS NOT NULL")
+    current = False
+    if cursor.fetchone()[0]:
+        cursor.execute("SELECT value FROM schema_meta WHERE key = 'version'")
+        row = cursor.fetchone()
+        current = bool(row) and row[0] == SCHEMA_VERSION
     conn.rollback()
-    return exists
+    return current
 
 
 def init_schema():
-    if IS_POSTGRES and _postgres_schema_exists():
+    if IS_POSTGRES and _postgres_schema_is_current():
         return
     if not IS_POSTGRES:
         # WAL lets readers proceed while another request is writing.
         _thread_connection().execute('PRAGMA journal_mode=WAL')
     for statement in _schema_statements():
         cursor.execute(statement)
-    if not IS_POSTGRES:
+    if IS_POSTGRES:
+        for table, column in _ADDED_COLUMNS:
+            cursor.execute(f'ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {column}')
+    else:
         _upgrade_old_sqlite_install()
     for statement in _INDEXES:
         cursor.execute(statement)
+    cursor.execute(
+        '''INSERT INTO schema_meta (key, value) VALUES ('version', ?)
+           ON CONFLICT (key) DO UPDATE SET value = excluded.value''',
+        (SCHEMA_VERSION,)
+    )
     conn.commit()
 
 
@@ -795,6 +810,7 @@ def delete_appliance(workspace_id, item_id):
         return False, None, None
     cursor.execute('DELETE FROM appliances_v5 WHERE id = ? AND workspace_id = ?', (item_id, workspace_id))
     cursor.execute('DELETE FROM service_history WHERE item_id = ?', (item_id,))
+    cursor.execute('DELETE FROM reminder_log WHERE item_id = ?', (item_id,))
     conn.commit()
     return True, row[0], row[1]
 
@@ -1194,6 +1210,7 @@ def delete_workspace(workspace_id):
     if item_ids:
         marks = ', '.join('?' for _ in item_ids)
         cursor.execute(f'DELETE FROM service_history WHERE item_id IN ({marks})', item_ids)
+        cursor.execute(f'DELETE FROM reminder_log WHERE item_id IN ({marks})', item_ids)
     for table in ('appliances_v5', 'chat_messages', 'workspace_settings', 'workspace_invites', 'workspace_members'):
         cursor.execute(f'DELETE FROM {table} WHERE workspace_id = ?', (workspace_id,))
     cursor.execute('DELETE FROM workspaces WHERE id = ?', (workspace_id,))
@@ -1240,3 +1257,57 @@ def export_workspace_rows(workspace_id):
     history = [dict(zip(['item_id', 'item_name', 'service_date', 'service_type', 'vendor', 'cost', 'notes',
                          'next_service_date'], row)) for row in cursor.fetchall()]
     return items, history
+
+
+# ---------------------------------------------------------------------------
+# Warranty cards and email reminders
+# ---------------------------------------------------------------------------
+
+def apply_warranty_card_details(workspace_id, item_id, months=None, start_date=None, notes=None):
+    """Stores what was read from a warranty card. The card's warranty length replaces the default period;
+    its start date is used only when the receipt had no purchase date. Returns the fields that changed."""
+    item = get_appliance(workspace_id, item_id)
+    if not item:
+        return {}
+    changes = {}
+    if months:
+        changes['warranty_months'] = int(months)
+    if start_date and not item.get('date_of_purchase'):
+        changes['date_of_purchase'] = start_date
+    if notes:
+        changes['warranty_info'] = notes[:500]
+    if changes:
+        update_appliance(workspace_id, item_id, changes)
+    return changes
+
+
+def workspace_member_emails(workspace_id):
+    cursor.execute('''
+        SELECT u.email FROM workspace_members m JOIN users u ON u.id = m.user_id
+        WHERE m.workspace_id = ? AND u.is_active = 1
+        ORDER BY m.joined_at
+    ''', (workspace_id,))
+    return [row[0] for row in cursor.fetchall()]
+
+
+def workspaces_with_reminders_enabled():
+    cursor.execute(
+        "SELECT workspace_id FROM workspace_settings WHERE key = 'reminders_enabled' AND value = '1' ORDER BY workspace_id"
+    )
+    return [row[0] for row in cursor.fetchall()]
+
+
+def reminder_already_sent(item_id, threshold_days):
+    cursor.execute('SELECT 1 FROM reminder_log WHERE item_id = ? AND threshold_days = ?', (item_id, threshold_days))
+    return cursor.fetchone() is not None
+
+
+def record_reminders_sent(item_thresholds):
+    """item_thresholds: (item_id, threshold_days) pairs that were just emailed."""
+    now = datetime.now().isoformat(timespec='seconds')
+    for item_id, threshold_days in item_thresholds:
+        cursor.execute(
+            'INSERT OR IGNORE INTO reminder_log (item_id, threshold_days, sent_at) VALUES (?, ?, ?)',
+            (item_id, threshold_days, now)
+        )
+    conn.commit()
