@@ -217,9 +217,17 @@
                                     <div class="form-text">The first reminder goes out this many days before a warranty ends.</div>
                                 </div>
                                 <div class="col-12">
-                                    <label class="form-label fw-semibold" for="settingsReminderRecipients">Recipients <span class="text-muted fw-normal">(optional)</span></label>
-                                    <input id="settingsReminderRecipients" type="text" class="form-control" placeholder="Everyone in this workspace">
-                                    <div class="form-text">Leave empty to email every member, or list addresses separated by commas.</div>
+                                    <label class="form-label fw-semibold" id="recipientPickerLabel">Who gets reminders</label>
+                                    <!-- The saved value stays a comma-separated list; empty means everyone, including people who join later. -->
+                                    <input id="settingsReminderRecipients" type="hidden">
+                                    <div class="dropdown recipient-picker">
+                                        <button type="button" class="form-select text-start recipient-picker-toggle" id="recipientPickerBtn"
+                                                data-bs-toggle="dropdown" data-bs-auto-close="outside" aria-expanded="false" aria-labelledby="recipientPickerLabel recipientPickerBtn">
+                                            <span id="recipientPickerSummary">Everyone in this workspace</span>
+                                        </button>
+                                        <div class="dropdown-menu recipient-picker-menu shadow-sm" role="menu" aria-labelledby="recipientPickerLabel" id="recipientPickerMenu"></div>
+                                    </div>
+                                    <div class="form-text">Choose "Everyone" or pick any mix of people. Anyone can also turn reminders off for themselves below.</div>
                                 </div>
                             </div>
                             {% if can_edit %}
@@ -435,6 +443,8 @@ async function loadWorkspaceUsers() {
                 </tr>`;
         }).join('') || stateRow(5, 'No members yet.');
 
+        workspaceMembers = data.members || [];
+        renderRecipientPicker();
         renderPendingInvites(data.invites || []);
         const transferSelect = document.getElementById('transferOwnerSelect');
         if (transferSelect) {
@@ -651,6 +661,74 @@ if (myRemindersToggle) {
         }
     });
 }
+
+// ---- Reminder recipients picker ----
+let workspaceMembers = [];
+
+function chosenRecipients() {
+    const input = document.getElementById('settingsReminderRecipients');
+    return (input?.value || '').split(',').map(e => e.trim().toLowerCase()).filter(Boolean);
+}
+
+function setChosenRecipients(emails) {
+    const input = document.getElementById('settingsReminderRecipients');
+    if (!input) return;
+    input.value = [...new Set(emails)].join(', ');
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    renderRecipientPicker();
+}
+
+function renderRecipientPicker() {
+    const menu = document.getElementById('recipientPickerMenu');
+    const summary = document.getElementById('recipientPickerSummary');
+    if (!menu || !summary) return;
+    const chosen = chosenRecipients();
+    const memberEmails = workspaceMembers.map(m => m.email.toLowerCase());
+    // Addresses saved earlier that aren't members (e.g. typed in before this picker existed) stay selectable.
+    const others = chosen.filter(e => !memberEmails.includes(e));
+    const people = [
+        ...workspaceMembers.map(m => ({ email: m.email.toLowerCase(), name: m.name || m.email, note: m.email })),
+        ...others.map(e => ({ email: e, name: e, note: 'Not a member' })),
+    ];
+    const everyone = chosen.length === 0;
+    const check = on => `<i class="bi ${on ? 'bi-check-square-fill text-primary' : 'bi-square'}" aria-hidden="true"></i>`;
+
+    menu.innerHTML = `
+        <button type="button" class="dropdown-item recipient-option" role="menuitemcheckbox" aria-checked="${everyone}" data-recipient="*">
+            ${check(everyone)}<span><strong>Everyone</strong><small>All current and future members</small></span>
+        </button>
+        <div class="dropdown-divider"></div>
+        ${people.map(p => {
+            const on = chosen.includes(p.email);
+            return `<button type="button" class="dropdown-item recipient-option" role="menuitemcheckbox" aria-checked="${on}" data-recipient="${escapeHtml(p.email)}">
+                ${check(on)}<span><strong>${escapeHtml(p.name)}</strong><small>${escapeHtml(p.note)}</small></span>
+            </button>`;
+        }).join('') || '<div class="px-3 py-2 small text-muted">Loading members…</div>'}`;
+
+    if (everyone) {
+        summary.textContent = 'Everyone in this workspace';
+    } else {
+        const names = chosen.map(e => {
+            const member = workspaceMembers.find(m => m.email.toLowerCase() === e);
+            return member ? (member.name || member.email) : e;
+        });
+        summary.textContent = names.length <= 3 ? names.join(', ') : `${names.slice(0, 2).join(', ')} and ${names.length - 2} others`;
+    }
+}
+
+document.getElementById('recipientPickerMenu')?.addEventListener('click', event => {
+    const option = event.target.closest('[data-recipient]');
+    if (!option) return;
+    const email = option.dataset.recipient;
+    if (email === '*') return setChosenRecipients([]);
+    const chosen = chosenRecipients();
+    const next = chosen.includes(email) ? chosen.filter(e => e !== email) : [...chosen, email];
+    // Picking every member one by one is the same as "Everyone".
+    const memberEmails = workspaceMembers.map(m => m.email.toLowerCase());
+    const allMembers = memberEmails.length > 0 && memberEmails.every(e => next.includes(e)) && next.length === memberEmails.length;
+    setChosenRecipients(allMembers ? [] : next);
+});
+document.addEventListener('settings:loaded', renderRecipientPicker);
 
 const settingsFields = () => [...document.querySelectorAll('[data-settings-pane] input, [data-settings-pane] select, [data-settings-pane] textarea')];
 const fieldValue = field => (field.type === 'checkbox' ? String(field.checked) : field.value);

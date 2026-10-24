@@ -1805,3 +1805,41 @@ body[data-reduced-motion="1"] .ai-typing span {
         font-size: 1.02rem;
     }
 }
+
+/* ---- Reminder recipients picker ---- */
+.recipient-picker-toggle {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.recipient-picker-menu {
+    max-height: 320px;
+    overflow-y: auto;
+    width: 100%;
+}
+
+.recipient-option {
+    align-items: flex-start !important;
+}
+
+.recipient-option .bi {
+    font-size: 1rem;
+    margin-top: 0.15rem;
+}
+
+.recipient-option span {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+}
+
+.recipient-option small {
+    color: var(--ink-500);
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.settings-pane[disabled] .recipient-picker-toggle {
+    pointer-events: none;
+}

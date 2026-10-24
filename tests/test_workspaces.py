@@ -702,14 +702,14 @@ class ZDataAndSecurityTests(unittest.TestCase):
         emails.EMAIL_ENABLED = False
         try:
             page = owner.get('/settings').get_data(as_text=True)
-            self.assertNotIn('settingsReminderRecipients', page)
+            self.assertNotIn('id="settingsReminderRecipients"', page)
             self.assertIn("Email reminders aren't available yet", page)
             self.assertEqual(owner.post('/api/reminders/send').status_code, 404)
         finally:
             emails.EMAIL_ENABLED = True
         page = owner.get('/settings').get_data(as_text=True)
         self.assertNotIn('SMTP', page, 'families never configure a mail server')
-        self.assertIn('settingsReminderRecipients', page)
+        self.assertIn('id="settingsReminderRecipients"', page)
 
     # --- warranty cards -----------------------------------------------------------------------------
 
