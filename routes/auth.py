@@ -44,7 +44,7 @@ def role_required(*roles):
             if not g.get('current_user'):
                 return jsonify({'error': 'Unauthorized. Please sign in.'}), 401
             if g.get('role') not in roles:
-                return jsonify({'error': 'You do not have permission to perform this action'}), 403
+                return jsonify({'error': 'Only the owner or an admin can do this.'}), 403
             return view(*args, **kwargs)
         return wrapped
     return decorator

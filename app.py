@@ -157,7 +157,7 @@ def enforce_authentication():
         # Drop sessions belonging to removed or deactivated users
         session.clear()
         if is_api:
-            return jsonify({'error': 'Unauthorized. Please sign in.'}), 401
+            return jsonify({'error': 'Please sign in to continue.'}), 401
         next_target = request.full_path if request.query_string else request.path
         return redirect(url_for('auth.login_page', next=next_target))
 

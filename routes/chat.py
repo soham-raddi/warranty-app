@@ -23,9 +23,9 @@ def chat():
     if not user_message:
         return jsonify({'error': 'message is required'}), 400
     if len(user_message) > 2000:
-        return jsonify({'error': 'Messages can be at most 2000 characters'}), 400
+        return jsonify({'error': 'Messages can be at most 2,000 characters.'}), 400
     if not CONVERSATION_ID_PATTERN.match(str(conversation_id)):
-        return jsonify({'error': 'Invalid conversation id'}), 400
+        return jsonify({'error': 'That conversation could not be found.'}), 400
 
     # History comes from the database, not the client, so it cannot be tampered with.
     owner = (g.workspace_id, g.current_user['id'])
@@ -83,4 +83,4 @@ def chat_conversation_messages(conversation_id):
 def clear_chat_history():
     # Chats are private, so anyone may clear their own history (and only their own).
     clear_chat_messages(g.workspace_id, g.current_user['id'])
-    return jsonify({'message': 'Chat history cleared successfully'})
+    return jsonify({'message': 'Chat history cleared.'})

@@ -64,7 +64,7 @@ def update_settings():
     if bad:
         return jsonify({'error': f'"{bad[0]}" is not a valid email address'}), 400
     if len(recipients) > reminders.MAX_RECIPIENTS:
-        return jsonify({'error': f'Add at most {reminders.MAX_RECIPIENTS} reminder recipients'}), 400
+        return jsonify({'error': f'Add at most {reminders.MAX_RECIPIENTS} reminder recipients.'}), 400
     reminder_recipients = ', '.join(recipients)
 
     if currency_code not in CURRENCY_SYMBOLS:
@@ -109,7 +109,7 @@ def update_settings():
     set_setting_value(g.workspace_id, 'reminder_days_before', reminder_days_before)
     set_setting_value(g.workspace_id, 'reminder_recipients', reminder_recipients)
 
-    return jsonify({'message': 'Settings updated successfully', 'settings': get_all_settings(g.workspace_id)})
+    return jsonify({'message': 'Settings saved.', 'settings': get_all_settings(g.workspace_id)})
 
 
 @settings_bp.route('/api/reminders/send', methods=['POST'])
@@ -127,7 +127,8 @@ def send_reminders_now():
     if not result['sent']:
         return jsonify({'error': 'No one to email. Add reminder recipients first.'}), 400
     people = 'person' if result['sent'] == 1 else 'people'
-    return jsonify({'message': f"Reminder about {result['items']} warranty(s) emailed to {result['sent']} {people}.",
+    warranties = 'warranty' if result['items'] == 1 else 'warranties'
+    return jsonify({'message': f"Reminder about {result['items']} {warranties} emailed to {result['sent']} {people}.",
                     **result})
 
 

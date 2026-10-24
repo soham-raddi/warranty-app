@@ -5,11 +5,11 @@
 {% block content %}
 <section class="dashboard-hero mb-4">
     <div class="hero-copy">
-        <h1 class="page-title mb-2">Your Warranty Command Center</h1>
-        <p class="page-subtitle mb-3">Track spending, monitor active warranties, and jump into actions quickly.</p>
+        <h1 class="page-title mb-2">Your warranty overview</h1>
+        <p class="page-subtitle mb-3">See what you've spent, which warranties are active and what needs your attention.</p>
         <div class="hero-actions d-flex gap-2 flex-wrap">
-            <a href="{{ url_for('pages.upload_page') }}" class="btn btn-primary"><i class="bi bi-upload"></i> Upload Receipt</a>
-            <a href="{{ url_for('pages.assistant_page') }}" class="btn btn-light"><i class="bi bi-robot"></i> Open Assistant</a>
+            <a href="{{ url_for('pages.upload_page') }}" class="btn btn-primary"><i class="bi bi-upload"></i> Upload a receipt</a>
+            <a href="{{ url_for('pages.assistant_page') }}" class="btn btn-light"><i class="bi bi-robot"></i> Ask the assistant</a>
         </div>
     </div>
     <div class="hero-glow"></div>
@@ -18,21 +18,21 @@
 <section class="row g-4 mb-4">
     <div class="col-md-4">
         <div class="card stat-card bg-primary p-4 shadow-sm h-100">
-            <h6>Total Investment</h6>
+            <h6>Total spent</h6>
             <h1 id="dash-total" class="fw-bold">—</h1>
             <i class="bi bi-wallet2"></i>
         </div>
     </div>
     <div class="col-md-4">
         <div class="card stat-card bg-success p-4 shadow-sm h-100">
-            <h6>Active Warranties</h6>
+            <h6>Active warranties</h6>
             <h1 id="dash-active" class="fw-bold">0</h1>
             <i class="bi bi-shield-check"></i>
         </div>
     </div>
     <div class="col-md-4">
         <div class="card stat-card bg-dark p-4 shadow-sm h-100">
-            <h6>Total Registered Items</h6>
+            <h6>Items tracked</h6>
             <h1 id="dash-count" class="fw-bold">0</h1>
             <i class="bi bi-box-seam"></i>
         </div>
@@ -43,8 +43,8 @@
     <div class="col-lg-7">
         <div class="card section-card shadow-sm h-100">
             <div class="card-header bg-white border-0 d-flex justify-content-between align-items-center">
-                <h5 class="mb-0">Recent Purchases</h5>
-                <a href="{{ url_for('pages.inventory_page') }}" class="btn btn-sm btn-outline-primary">View All</a>
+                <h5 class="mb-0">Recent purchases</h5>
+                <a href="{{ url_for('pages.inventory_page') }}" class="btn btn-sm btn-outline-primary">View all</a>
             </div>
             <div class="card-body p-0">
                 <div class="table-responsive">
@@ -67,7 +67,7 @@
     <div class="col-lg-5">
         <div class="card section-card shadow-sm h-100">
             <div class="card-header bg-white border-0">
-                <h5 class="mb-0">Needs Attention</h5>
+                <h5 class="mb-0">Needs attention</h5>
             </div>
             <div class="card-body" id="dash-alerts"></div>
         </div>

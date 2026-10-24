@@ -115,8 +115,8 @@
                 <h4 class="fw-bold mb-1 text-dark">This invite has expired</h4>
                 <p class="text-muted small mb-0">Ask {{ invite.invited_by_name }} to send you a new link to {{ invite.workspace_name }}.</p>
                 {% else %}
-                <h4 class="fw-bold mb-1 text-dark">Invite link not valid</h4>
-                <p class="text-muted small mb-0">It may have been used already, replaced with a newer link, or revoked. Ask for a new one.</p>
+                <h4 class="fw-bold mb-1 text-dark">This invite link isn't valid</h4>
+                <p class="text-muted small mb-0">It may have been used already, replaced by a newer link or revoked. Ask for a new one.</p>
                 {% endif %}
             </div>
 
@@ -134,7 +134,7 @@
                         <button type="submit" class="btn btn-outline-secondary w-100">Go to {{ invite.workspace_name }}</button>
                     </form>
                     {% if not invite.accepted %}
-                    <p class="small text-muted text-center mt-2 mb-0">Testing your own link? Open it in a private/incognito window, or in another browser, and sign in there.</p>
+                    <p class="small text-muted text-center mt-2 mb-0">Testing your own link? Open it in a private (incognito) window or another browser, and sign in there.</p>
                     {% endif %}
                     {% elif user %}
                     <form method="post" action="{{ url_for('workspaces.accept_invite', token=token) }}">
@@ -159,7 +159,7 @@
                         {% if allow_dev_login %}
                         <a href="{{ url_for('auth.dev_login', next=request.path) }}" class="btn btn-outline-secondary btn-sm w-100">Continue with dev login</a>
                         {% endif %}
-                        <p class="small text-muted text-center mt-2 mb-0">The link works once and expires on {{ invite.expires_at|nice_date if invite.expires_at else 'revocation' }}.</p>
+                        <p class="small text-muted text-center mt-2 mb-0">The link works once{{ ' and expires on ' ~ invite.expires_at|nice_date if invite.expires_at }}.</p>
                     {% endif %}
                 {% else %}
                 <a href="{{ url_for('pages.dashboard_page') if user else url_for('auth.login_page') }}" class="btn btn-outline-secondary w-100">{{ 'Go to your workspace' if user else 'Go to sign in' }}</a>

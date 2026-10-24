@@ -468,7 +468,7 @@ class WorkspaceTests(unittest.TestCase):
     def test_20_unknown_link_shows_not_valid(self):
         page = sign_in(STRANGER).get('/join/not-a-real-token')
         self.assertEqual(page.status_code, 404)
-        self.assertIn('not valid', page.get_data(as_text=True))
+        self.assertIn("isn't valid", page.get_data(as_text=True))
 
     def test_21_raw_tokens_are_never_stored(self):
         owner = sign_in(OWNER)

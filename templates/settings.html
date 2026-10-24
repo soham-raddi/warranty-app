@@ -53,7 +53,7 @@
                             <h3 class="settings-group-title mb-3">Date and time</h3>
                             <div class="row g-3">
                                 <div class="col-md-6">
-                                    <label class="form-label fw-semibold" for="settingsTimezone">Timezone</label>
+                                    <label class="form-label fw-semibold" for="settingsTimezone">Time zone</label>
                                     <select id="settingsTimezone" class="form-select">
                                         <option value="UTC">UTC</option>
                                         <option value="Asia/Kolkata">Asia/Kolkata</option>
@@ -138,7 +138,7 @@
                                 <div class="col-md-6">
                                     <label class="form-label fw-semibold" for="settingsThemeMode">Theme</label>
                                     <select id="settingsThemeMode" class="form-select">
-                                        <option value="system">Follow system preference</option>
+                                        <option value="system">Match my device</option>
                                         <option value="light">Light</option>
                                         <option value="dark">Dark</option>
                                     </select>
@@ -170,7 +170,7 @@
                                 <input id="settingsReducedMotion" type="checkbox">
                                 <span>
                                     <strong>Reduce motion</strong>
-                                    <small>Minimizes animation and hover transitions across the app.</small>
+                                    <small>Turns off most animations and hover effects.</small>
                                 </span>
                             </label>
                         </div>
@@ -184,7 +184,7 @@
                     <fieldset class="settings-pane" data-settings-pane {% if not can_edit %}disabled{% endif %}>
                         <header class="settings-pane-header">
                             <h2 class="settings-pane-title">Alerts & reminders</h2>
-                            <p class="settings-group-note mb-0">When items show up under Needs Attention{{ ', and who gets warranty expiry emails' if email_enabled }}.</p>
+                            <p class="settings-group-note mb-0">When items show up under Needs attention{{ ', and who gets warranty expiry emails' if email_enabled }}.</p>
                         </header>
 
                         <div class="settings-group">
@@ -193,7 +193,7 @@
                                 <div class="col-md-6">
                                     <label class="form-label fw-semibold" for="settingsExpiryAlertDays">Alert window (days)</label>
                                     <input id="settingsExpiryAlertDays" type="number" min="0" max="3650" class="form-control" placeholder="30">
-                                    <div class="form-text">Items expiring within this many days, or expired within it, appear under Needs Attention.</div>
+                                    <div class="form-text">Items expiring within this many days, or expired within it, appear under Needs attention.</div>
                                 </div>
                             </div>
                         </div>
@@ -230,7 +230,7 @@
                             {% endif %}
                         </div>
                         {% else %}
-                        <p class="small text-muted mb-0"><i class="bi bi-info-circle me-1"></i>Email reminders aren't available yet. Warranties that are about to expire show up on your dashboard under Needs Attention.</p>
+                        <p class="small text-muted mb-0"><i class="bi bi-info-circle me-1"></i>Email reminders aren't available yet. Warranties that are about to expire show up on your dashboard under Needs attention.</p>
                         {% endif %}
                     </fieldset>
                     {% if email_enabled %}
@@ -371,7 +371,7 @@
                             <div class="data-row data-row-danger">
                                 <div>
                                     <strong>Delete my account</strong>
-                                    <small>Removes your account, your chats and any workspace you own on your own. Workspaces others still use must be transferred first.</small>
+                                    <small>Removes your account, your chats and any workspace you own that has no other members. Workspaces others still use must be transferred first.</small>
                                 </div>
                                 <button type="button" class="btn btn-outline-danger btn-sm" id="deleteAccountBtn">Delete account</button>
                             </div>
@@ -408,7 +408,7 @@ async function loadWorkspaceUsers() {
         const res = await fetch('/api/workspace/members');
         const data = await res.json();
         if (!res.ok) {
-            tbody.innerHTML = stateRow(5, data.error || 'Unable to load members.', true);
+            tbody.innerHTML = stateRow(5, data.error || 'Could not load members.', true);
             return;
         }
 
@@ -445,7 +445,7 @@ async function loadWorkspaceUsers() {
             document.getElementById('transferOwnerBtn').disabled = !others.length;
         }
     } catch (e) {
-        tbody.innerHTML = stateRow(5, 'Network error loading members.', true);
+        tbody.innerHTML = stateRow(5, 'Could not load members. Check your connection and try again.', true);
     }
 }
 

@@ -129,7 +129,8 @@ function warrantyBadge(status) {
         'Expiring Soon': 'bg-warning text-dark',
         'Expired': 'bg-danger',
     };
-    return `<span class="badge ${classes[label] || 'bg-secondary'}">${escapeHtml(label)}</span>`;
+    const text = label === 'Expiring Soon' ? 'Expiring soon' : label;
+    return `<span class="badge ${classes[label] || 'bg-secondary'}">${escapeHtml(text)}</span>`;
 }
 
 function describeDaysRemaining(days) {
@@ -306,14 +307,14 @@ async function saveServiceHistory(event) {
         if (!res.ok) {
             if (status) {
                 status.className = 'small mt-3 mb-0 text-danger';
-                status.innerText = data.error || 'Failed to save service history.';
+                status.innerText = data.error || 'Could not save the service record.';
             }
             return;
         }
 
         if (status) {
             status.className = 'small mt-3 mb-0 text-success';
-            status.innerText = 'Service history saved.';
+            status.innerText = 'Service record saved.';
         }
 
         const listEl = byId('serviceHistoryList');
@@ -328,7 +329,7 @@ async function saveServiceHistory(event) {
     } catch (e) {
         if (status) {
             status.className = 'small mt-3 mb-0 text-danger';
-            status.innerText = 'Failed to save service history.';
+            status.innerText = 'Could not save the service record.';
         }
     }
 }
@@ -395,7 +396,7 @@ function setUploadBusy(busy) {
     const btn = byId('upBtn');
     if (btn) btn.disabled = busy;
     byId('upLoader')?.classList.toggle('d-none', !busy);
-    setText('upBtnLabel', busy ? 'Reading the receipt...' : 'Scan receipt');
+    setText('upBtnLabel', busy ? 'Reading the receipt…' : 'Scan receipt');
 }
 
 async function uploadReceipt() {
@@ -580,7 +581,7 @@ async function loadInventory() {
     const tbody = byId('invTable');
     if (!tbody) return;
 
-    if (!inventoryItems.length) tbody.innerHTML = stateRow(5, 'Loading inventory...');
+    if (!inventoryItems.length) tbody.innerHTML = stateRow(5, 'Loading inventory…');
 
     try {
         const res = await fetch('/api/inventory');
@@ -799,14 +800,14 @@ async function loadDashboard() {
                 blocks.push(`
                     <div class="attention-item">
                         <h6>${escapeHtml(i.item_name || 'Item')}</h6>
-                        <p>Warranty card missing. Add it from Inventory for faster claim support.</p>
+                        <p>No warranty card yet. Add one from Inventory so it's handy if you need to make a claim.</p>
                     </div>
                 `);
             });
 
             alerts.innerHTML = blocks.length
                 ? `<div class="dashboard-attention-list">${blocks.slice(0, 6).join('')}</div>`
-                : stateBlock('All items look healthy. No immediate follow-ups.');
+                : stateBlock('Everything looks good. Nothing needs your attention right now.');
         }
     } catch (e) {
         setText('dash-total', money(0));
@@ -851,13 +852,13 @@ async function attachWarrantyCard(id) {
             });
             const data = await readJsonResponse(res);
             if (!res.ok) {
-                showToast(data.error || 'Failed to attach warranty card.', 'danger');
+                showToast(data.error || 'Could not attach the warranty card.', 'danger');
                 return;
             }
             showToast(data.message || 'Warranty card attached.', data.card_read ? 'success' : 'warning');
             await Promise.all([loadInventory(), loadDashboard()]);
         } catch (e) {
-            showToast('Failed to upload warranty card.', 'danger');
+            showToast('Could not upload the warranty card.', 'danger');
         }
     };
 
@@ -865,14 +866,14 @@ async function attachWarrantyCard(id) {
 }
 
 async function delItem(id) {
-    if (!confirm('Delete this record permanently?')) return;
+    if (!confirm('Delete this item permanently? This cannot be undone.')) return;
     const res = await fetch(`/api/delete/${id}`, { method: 'DELETE' });
     if (res.ok) {
         showToast('Item deleted.', 'success');
         await Promise.all([loadInventory(), loadDashboard()]);
     } else {
         const data = await res.json().catch(() => ({}));
-        showToast(data.error || 'Failed to delete this record.', 'danger');
+        showToast(data.error || 'Could not delete this item.', 'danger');
     }
 }
 
@@ -1069,7 +1070,7 @@ async function loadConversationList(query = '') {
 
     const container = byId('recentConversations');
     if (container) {
-        container.innerHTML = stateBlock('Loading conversations...');
+        container.innerHTML = stateBlock('Loading conversations…');
     }
 
     try {
@@ -1136,7 +1137,7 @@ async function clearChatHistory() {
         const res = await fetch('/api/chat/history', { method: 'DELETE' });
         if (!res.ok) {
             const data = await res.json().catch(() => ({}));
-            showToast(data.error || 'Failed to clear chat history.', 'danger');
+            showToast(data.error || 'Could not clear the chat history.', 'danger');
             return;
         }
 
@@ -1144,7 +1145,7 @@ async function clearChatHistory() {
         startNewConversation();
         await loadConversationList('');
     } catch (e) {
-        showToast('Failed to clear chat history.', 'danger');
+        showToast('Could not clear the chat history.', 'danger');
     }
 }
 
@@ -1193,7 +1194,7 @@ async function sendMessage() {
         activeConversationMessages.push({
             id: generateLocalMessageId('assistant'),
             role: 'assistant',
-            content: 'Connection error.',
+            content: 'Could not reach the server. Check your connection and try again.',
             created_at: new Date().toISOString()
         });
         renderChatThread(activeConversationMessages);
@@ -1310,7 +1311,7 @@ async function saveSettings(event) {
         const data = await res.json();
 
         if (!res.ok) {
-            showToast(data.error || 'Failed to save settings.', 'danger');
+            showToast(data.error || 'Could not save the settings.', 'danger');
             return;
         }
 
@@ -1326,22 +1327,22 @@ async function saveSettings(event) {
             renderRecentConversationsSidebar(lastConversationList);
         }
     } catch (e) {
-        showToast('Failed to save settings.', 'danger');
+        showToast('Could not save the settings.', 'danger');
     }
 }
 
 async function sendReminderEmailsNow() {
-    showToast('Sending reminder emails...', 'info');
+    showToast('Sending reminder emails…', 'info');
     try {
         const res = await fetch('/api/reminders/send', { method: 'POST' });
         const data = await readJsonResponse(res);
         if (!res.ok) {
-            showToast(data.error || 'Failed to send reminder emails.', 'danger');
+            showToast(data.error || 'Could not send the reminder emails.', 'danger');
             return;
         }
         showToast(data.message || 'Reminder emails sent.', data.sent ? 'success' : 'info');
     } catch (e) {
-        showToast('Failed to send reminder emails.', 'danger');
+        showToast('Could not send the reminder emails.', 'danger');
     }
 }
 

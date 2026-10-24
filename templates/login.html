@@ -145,14 +145,14 @@
                 <div class="alert alert-warning d-flex align-items-start gap-2 py-2 px-3 small" role="alert">
                     <i class="bi bi-exclamation-triangle-fill fs-5 flex-shrink-0"></i>
                     <div>
-                        <strong>Authentication failed:</strong> Google sign-in was canceled or encountered an error.
+                        <strong>Sign-in failed:</strong> Google sign-in was canceled or ran into an error. Please try again.
                     </div>
                 </div>
                 {% elif error == 'not_configured' %}
                 <div class="alert alert-info d-flex align-items-start gap-2 py-2 px-3 small" role="alert">
                     <i class="bi bi-info-circle-fill fs-5 flex-shrink-0"></i>
                     <div>
-                        Google OAuth keys are not configured yet. Add <code>GOOGLE_CLIENT_ID</code> and <code>GOOGLE_CLIENT_SECRET</code> to your <code>.env</code> file.
+                        Google sign-in isn't set up yet. Add <code>GOOGLE_CLIENT_ID</code> and <code>GOOGLE_CLIENT_SECRET</code> to your <code>.env</code> file.
                     </div>
                 </div>
                 {% endif %}
@@ -167,13 +167,13 @@
                     </svg>
                     <span>Sign in with Google</span>
                 </a>
-                <p class="text-center text-muted small mb-3">Secure passwordless authentication via Google Identity</p>
+                <p class="text-center text-muted small mb-3">Sign in securely with Google. Digital Twin never sees your password.</p>
                 {% elif is_production %}
                 <div class="alert alert-secondary small" role="status">Sign-in is temporarily unavailable. Please try again later.</div>
                 {% else %}
                 <div class="setup-note mb-3">
-                    <div class="fw-semibold text-dark mb-1"><i class="bi bi-gear-fill me-1"></i> Google OAuth Setup Needed</div>
-                    <div>To enable Google Sign-In, add these lines to your <code>.env</code> file:</div>
+                    <div class="fw-semibold text-dark mb-1"><i class="bi bi-gear-fill me-1"></i> Google sign-in needs setting up</div>
+                    <div>To turn on Google sign-in, add these lines to your <code>.env</code> file:</div>
                     <pre class="bg-white p-2 rounded border mt-2 mb-2 text-dark" style="font-size: 0.75rem;"><code>GOOGLE_CLIENT_ID=your-client-id.apps.googleusercontent.com
 GOOGLE_CLIENT_SECRET=your-client-secret
 OWNER_EMAIL=your-email@gmail.com (optional)</code></pre>
@@ -190,12 +190,12 @@ OWNER_EMAIL=your-email@gmail.com (optional)</code></pre>
                         <i class="bi bi-person-check-fill"></i>
                         <span>Enter as Local Owner (Dev Mode)</span>
                     </a>
-                    <span class="text-muted d-block mt-1" style="font-size: 0.72rem;">Available for local testing & development</span>
+                    <span class="text-muted d-block mt-1" style="font-size: 0.72rem;">Only available for local testing and development</span>
                 </div>
                 {% endif %}
 
                 <p class="login-legal">
-                    By signing in you agree to the <a href="{{ url_for('pages.terms_page') }}">Terms</a> and
+                    By signing in, you agree to the <a href="{{ url_for('pages.terms_page') }}">Terms</a> and
                     <a href="{{ url_for('pages.privacy_page') }}">Privacy Policy</a>.
                 </p>
             </div>

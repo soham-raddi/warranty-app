@@ -45,7 +45,7 @@ def _file_extension(filename):
 def _validate_upload(file):
     """Returns an error message for unsupported uploads, or None if the file is acceptable."""
     if not file or file.filename == '':
-        return 'No selected file'
+        return 'Choose a file to upload.'
     if _file_extension(file.filename) not in ALLOWED_EXTENSIONS:
         return 'Unsupported file type. Upload a JPG, PNG, WEBP or PDF file.'
     return None
@@ -104,7 +104,7 @@ def _duplicate_of(receipt, item):
 def scan_receipt():
     """Reads a receipt for the person to review. Nothing is saved until they confirm."""
     if 'receipt_image' not in request.files:
-        return jsonify({"error": "No file uploaded"}), 400
+        return jsonify({"error": "Choose a file to upload."}), 400
     file = request.files['receipt_image']
     error = _validate_upload(file)
     if error:
@@ -201,7 +201,7 @@ def edit_item(item_id):
         return jsonify({'error': error}), 400
 
     update_appliance(g.workspace_id, item_id, changes)
-    return jsonify({'message': 'Item updated', 'item': get_appliance(g.workspace_id, item_id)})
+    return jsonify({'message': 'Item updated.', 'item': get_appliance(g.workspace_id, item_id)})
 
 
 @receipts_bp.route('/files/receipt/<int:item_id>')
@@ -224,14 +224,14 @@ def delete_item(item_id):
         return jsonify({'error': 'Inventory item not found'}), 404
     storage.delete(file_path)
     storage.delete(warranty_card_path)
-    return jsonify({'message': 'Item and image deleted successfully'})
+    return jsonify({'message': 'Item deleted.'})
 
 
 @receipts_bp.route('/api/inventory/<int:item_id>/attach-warranty-card', methods=['POST'])
 @limit('card', per_workspace=True, hourly=30, daily=100)
 def attach_warranty_card(item_id):
     if 'warranty_card' not in request.files:
-        return jsonify({"error": "No warranty card file uploaded"}), 400
+        return jsonify({"error": "Choose a warranty card file to upload."}), 400
 
     file = request.files['warranty_card']
     error = _validate_upload(file)
@@ -333,7 +333,7 @@ def add_history_entry(item_id):
     )
 
     return jsonify({
-        'message': 'Service history entry added successfully',
+        'message': 'Service record added.',
         'entry_id': entry_id,
         'entries': get_service_history(item_id)
     })

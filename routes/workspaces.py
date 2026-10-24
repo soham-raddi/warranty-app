@@ -114,7 +114,7 @@ def create_my_workspace():
     user = g.current_user
     owned = [w for w in get_user_workspaces(user['id']) if w['role'] == 'owner']
     if len(owned) >= MAX_OWNED_WORKSPACES:
-        return jsonify({'error': f'You can own at most {MAX_OWNED_WORKSPACES} workspaces'}), 400
+        return jsonify({'error': f'You can own at most {MAX_OWNED_WORKSPACES} workspaces.'}), 400
 
     payload = request.json or {}
     name = _clean_name(payload.get('name')) or _default_workspace_name(user)
@@ -132,10 +132,10 @@ def switch_workspace():
         return jsonify({'error': 'workspace_id is required'}), 400
 
     if not get_membership_role(workspace_id, g.current_user['id']):
-        return jsonify({'error': 'You are not a member of that workspace'}), 403
+        return jsonify({'error': 'You are not a member of that workspace.'}), 403
 
     session['workspace_id'] = workspace_id
-    return jsonify({'message': 'Switched workspace', 'workspace_id': workspace_id})
+    return jsonify({'message': 'Switched workspace.', 'workspace_id': workspace_id})
 
 
 @workspaces_bp.route('/api/workspace', methods=['PATCH'])
@@ -143,9 +143,9 @@ def switch_workspace():
 def rename_current_workspace():
     name = _clean_name((request.json or {}).get('name'))
     if not name:
-        return jsonify({'error': 'Workspace name cannot be empty'}), 400
+        return jsonify({'error': 'Enter a workspace name.'}), 400
     rename_workspace(g.workspace_id, name)
-    return jsonify({'message': 'Workspace renamed', 'workspace': {'id': g.workspace_id, 'name': name}})
+    return jsonify({'message': 'Workspace renamed.', 'workspace': {'id': g.workspace_id, 'name': name}})
 
 
 @workspaces_bp.route('/api/workspace/members', methods=['GET'])
@@ -171,11 +171,11 @@ def invite_member():
     role = str(payload.get('role', 'member')).strip().lower()
 
     if not EMAIL_PATTERN.match(email):
-        return jsonify({'error': 'Enter a valid email address'}), 400
+        return jsonify({'error': 'Enter a valid email address.'}), 400
     if role not in ('member', 'admin'):
         role = 'member'
     if role == 'admin' and g.role != 'owner':
-        return jsonify({'error': 'Only the owner can invite admins'}), 403
+        return jsonify({'error': 'Only the owner can invite admins.'}), 403
 
     invite, error = create_invite(g.workspace_id, email, role, g.current_user['id'])
     if error:
@@ -232,20 +232,20 @@ def email_invite_again(invite_id):
 def revoke_invite(invite_id):
     if not delete_invite(g.workspace_id, invite_id):
         return jsonify({'error': 'Invite not found'}), 404
-    return jsonify({'message': 'Invite revoked'})
+    return jsonify({'message': 'Invite revoked.'})
 
 
 @workspaces_bp.route('/api/workspace/members/<int:user_id>', methods=['DELETE'])
 @role_required('owner', 'admin')
 def remove_member(user_id):
     if user_id == g.current_user['id']:
-        return jsonify({'error': 'Use "Leave workspace" to remove yourself'}), 400
+        return jsonify({'error': 'Use "Leave workspace" to remove yourself.'}), 400
 
     target_role = get_membership_role(g.workspace_id, user_id)
     if target_role is None:
-        return jsonify({'error': 'This person is not a member of the workspace'}), 404
+        return jsonify({'error': 'This person is not a member of the workspace.'}), 404
     if g.role == 'admin' and target_role != 'member':
-        return jsonify({'error': 'Admins can only remove members'}), 403
+        return jsonify({'error': 'Admins can only remove members.'}), 403
 
     removed, message = remove_workspace_member(g.workspace_id, user_id)
     if not removed:
@@ -256,12 +256,12 @@ def remove_member(user_id):
 @workspaces_bp.route('/api/workspace/leave', methods=['POST'])
 def leave_workspace():
     if g.role == 'owner':
-        return jsonify({'error': 'The owner cannot leave their own workspace'}), 400
+        return jsonify({'error': 'The owner cannot leave their own workspace. Transfer ownership first.'}), 400
 
     remove_workspace_member(g.workspace_id, g.current_user['id'])
     remaining = get_user_workspaces(g.current_user['id'])
     session['workspace_id'] = remaining[0]['id'] if remaining else None
-    return jsonify({'message': 'You left the workspace', 'redirect': url_for('pages.dashboard_page') if remaining else url_for('workspaces.welcome_page')})
+    return jsonify({'message': 'You left the workspace.', 'redirect': url_for('pages.dashboard_page') if remaining else url_for('workspaces.welcome_page')})
 
 
 @workspaces_bp.route('/join/<token>', methods=['GET'])
@@ -307,7 +307,7 @@ def transfer_workspace():
     try:
         new_owner_id = int((request.json or {}).get('user_id'))
     except (TypeError, ValueError):
-        return jsonify({'error': 'Choose a member to make owner'}), 400
+        return jsonify({'error': 'Choose a member to make the owner.'}), 400
     error = transfer_ownership(g.workspace_id, g.current_user['id'], new_owner_id)
     if error:
         return jsonify({'error': error}), 400
@@ -320,12 +320,12 @@ def delete_current_workspace():
     """Permanently deletes the workspace, its items, receipts, settings, invites and chats."""
     confirm = str((request.json or {}).get('confirm_name', '')).strip()
     if confirm != (g.workspace or {}).get('name'):
-        return jsonify({'error': 'Type the workspace name exactly to confirm'}), 400
+        return jsonify({'error': 'Type the workspace name exactly to confirm.'}), 400
     for ref in delete_workspace(g.workspace_id):
         storage.delete(ref)
     session.pop('workspace_id', None)
     remaining = get_user_workspaces(g.current_user['id'])
-    return jsonify({'message': 'Workspace deleted',
+    return jsonify({'message': 'Workspace deleted.',
                     'redirect': url_for('pages.dashboard_page') if remaining else url_for('workspaces.welcome_page')})
 
 
@@ -366,7 +366,7 @@ def delete_my_account():
     """Deletes the signed-in person's account, workspaces they own alone, and their chats."""
     user = g.current_user
     if str((request.json or {}).get('confirm_email', '')).strip().lower() != user['email'].lower():
-        return jsonify({'error': 'Type your email address exactly to confirm'}), 400
+        return jsonify({'error': 'Type your email address exactly to confirm.'}), 400
     shared = owned_workspaces_with_other_members(user['id'])
     if shared:
         names = ', '.join(w['name'] for w in shared)
@@ -375,4 +375,4 @@ def delete_my_account():
     for ref in delete_user_account(user['id']):
         storage.delete(ref)
     session.clear()
-    return jsonify({'message': 'Your account has been deleted', 'redirect': url_for('auth.login_page')})
+    return jsonify({'message': 'Your account has been deleted.', 'redirect': url_for('auth.login_page')})
