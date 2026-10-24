@@ -9,6 +9,7 @@ To run the same tests against Postgres, point TEST_DATABASE_URL at an EMPTY, thr
 (everything in it is deleted first):  TEST_DATABASE_URL=postgresql://... python -m unittest discover -s tests
 """
 import io
+import json
 import os
 import shutil
 import sqlite3
@@ -122,8 +123,9 @@ _extract_counter = {'n': 0}
 
 def _fake_extract(_data, _filename):
     _extract_counter['n'] += 1
-    return {'item_name': 'Fridge', 'total_amount': '50000', 'date_of_purchase': '2026-05-01',
-            'invoice_number': f"F-{_extract_counter['n']}", 'store_name': 'Shop'}
+    return {'receipt': {'total_amount': '50000', 'date_of_purchase': '2026-05-01',
+                        'invoice_number': f"F-{_extract_counter['n']}", 'store_name': 'Shop'},
+            'items': [{'item_name': 'Fridge', 'amount': '50000', 'category': 'Kitchen Appliances'}]}
 
 
 class _FakeCompletions:
@@ -152,8 +154,14 @@ def fake_send_email(to, subject, html_body, text_body, idempotency_key=None):
     return f'fake-{len(sent)}'
 
 
+def fake_send_batch(messages, idempotency_key=None):
+    for message in messages:
+        sent.append({**message, 'key': idempotency_key})
+
+
 emails.EMAIL_ENABLED = True
 emails.send_email = fake_send_email
+emails.send_batch = fake_send_batch
 chatbot.get_client = lambda: types.SimpleNamespace(chat=types.SimpleNamespace(completions=_FakeCompletions()))
 
 
@@ -173,9 +181,22 @@ def attach_card(client, item_id):
                        content_type='multipart/form-data')
 
 
-def upload(client, name='receipt.jpg'):
-    return client.post('/upload', data={'receipt_image': (io.BytesIO(b'fake image'), name)},
+def scan(client, name='receipt.jpg'):
+    return client.post('/api/receipts/scan', data={'receipt_image': (io.BytesIO(b'fake image'), name)},
                        content_type='multipart/form-data')
+
+
+def save(client, details, name='receipt.jpg'):
+    return client.post('/api/receipts/save', content_type='multipart/form-data', data={
+        'receipt_image': (io.BytesIO(b'fake image'), name), 'details': json.dumps(details)})
+
+
+def upload(client, name='receipt.jpg'):
+    """Scans a receipt and saves everything that was found, as the review screen does by default."""
+    scanned = scan(client, name)
+    if scanned.status_code != 200:
+        return scanned
+    return save(client, scanned.json, name)
 
 
 
@@ -227,7 +248,7 @@ class WorkspaceTests(unittest.TestCase):
 
     def test_03_families_cannot_see_or_touch_each_others_data(self):
         owner, friend = sign_in(OWNER), sign_in(FRIEND)
-        self.assertEqual(upload(friend).status_code, 200)
+        self.assertEqual(upload(friend).status_code, 201)
         friend_item = friend.get('/api/inventory').json['items'][0]
         owner_item = owner.get('/api/inventory').json['items'][0]
         friend_item_id, owner_item_id = friend_item['id'], owner_item['id']
@@ -253,7 +274,7 @@ class WorkspaceTests(unittest.TestCase):
 
         # The same invoice may exist in two families without being called a duplicate.
         _extract_counter['n'] -= 1
-        self.assertEqual(upload(owner).status_code, 200)
+        self.assertEqual(upload(owner).status_code, 201)
 
     def test_04_cannot_switch_into_another_family(self):
         owner, friend = sign_in(OWNER), sign_in(FRIEND)
@@ -296,7 +317,7 @@ class WorkspaceTests(unittest.TestCase):
         self.assertEqual(wife.put('/api/settings', json={}).status_code, 403)
         self.assertEqual(wife.post('/api/workspace/invites', json={'email': 'x@example.com'}).status_code, 403)
         self.assertEqual(wife.patch('/api/workspace', json={'name': 'Hacked'}).status_code, 403)
-        self.assertEqual(upload(wife).status_code, 200)
+        self.assertEqual(upload(wife).status_code, 201)
 
     def test_08_chats_are_private_to_each_person(self):
         friend, wife = sign_in(FRIEND), sign_in(FRIEND_FAMILY)
@@ -808,6 +829,147 @@ class ZDataAndSecurityTests(unittest.TestCase):
         settings['reminder_recipients'] = 'Good@Example.com; dad@example.com'
         saved = owner.put('/api/settings', json=settings).json['settings']
         self.assertEqual(saved['reminder_recipients'], 'good@example.com, dad@example.com')
+
+
+class ZZReviewAndInventoryTests(unittest.TestCase):
+    """Reviewing scans, receipts with several products, re-reading cards and unsubscribing."""
+
+    def test_nothing_is_saved_until_the_review_is_confirmed(self):
+        owner = new_family('reviewer@example.com', 'Review Family')
+        scanned = scan(owner)
+        self.assertEqual(scanned.status_code, 200)
+        self.assertEqual(owner.get('/api/inventory').json['items'], [], 'scanning alone saves nothing')
+
+        details = scanned.json
+        details['items'][0].update({'item_name': 'Samsung Fridge', 'warranty_months': '24', 'brand': 'Samsung'})
+        details['receipt']['store_name'] = 'Croma'
+        saved = save(owner, details)
+        self.assertEqual(saved.status_code, 201)
+        item = owner.get('/api/inventory').json['items'][0]
+        self.assertEqual((item['item_name'], item['brand'], item['store_name']), ('Samsung Fridge', 'Samsung', 'Croma'))
+        self.assertEqual(item['warranty_months'], 24)
+
+        again = save(owner, details)
+        self.assertEqual(again.status_code, 409, 'saving the same receipt twice is refused')
+        self.assertTrue(scan(owner).json['items'][0]['duplicate_item_id'] is None, 'new invoice number, not a duplicate')
+
+    def test_review_rejects_bad_details(self):
+        owner = new_family('badreview@example.com', 'Bad Review Family')
+        details = scan(owner).json
+        for change in ({'item_name': ''}, {'warranty_months': '999'}):
+            broken = json.loads(json.dumps(details))
+            broken['items'][0].update(change)
+            self.assertEqual(save(owner, broken).status_code, 400, change)
+        broken = json.loads(json.dumps(details))
+        broken['receipt']['date_of_purchase'] = '31/12/2026'
+        self.assertEqual(save(owner, broken).status_code, 400)
+        self.assertEqual(save(owner, {'receipt': {}, 'items': []}).status_code, 400)
+        self.assertEqual(owner.get('/api/inventory').json['items'], [])
+
+    def test_receipt_with_several_products(self):
+        owner = new_family('multi@example.com', 'Multi Family')
+        details = {
+            'receipt': {'store_name': 'Electronics Mart', 'invoice_number': 'EM-77', 'date_of_purchase': '2026-06-01',
+                        'total_amount': '91000'},
+            'items': [{'item_name': 'Television', 'amount': '60000', 'warranty_months': '12'},
+                      {'item_name': 'Soundbar', 'amount': '25000'},
+                      {'item_name': 'Wall mount', 'amount': '6000'}],
+        }
+        saved = save(owner, details)
+        self.assertEqual(saved.status_code, 201)
+        self.assertEqual(saved.json['saved'], 3)
+        data = owner.get('/api/inventory').json
+        self.assertEqual(sorted(i['item_name'] for i in data['items']), ['Soundbar', 'Television', 'Wall mount'])
+        self.assertEqual(data['total_spent'], 91000, 'each item counts its own amount, not the receipt total')
+        self.assertEqual({i['store_name'] for i in data['items']}, {'Electronics Mart'})
+
+        # All three share one stored receipt, which is only deleted with the last of them.
+        ids = [i['id'] for i in data['items']]
+        self.assertEqual(owner.get(f'/files/receipt/{ids[0]}').status_code, 200)
+        owner.delete(f'/api/delete/{ids[0]}')
+        self.assertEqual(owner.get(f'/files/receipt/{ids[1]}').status_code, 200, 'still there for the others')
+        owner.delete(f'/api/delete/{ids[1]}')
+        owner.delete(f'/api/delete/{ids[2]}')
+        self.assertEqual(len(os.listdir(os.path.join(TEST_DIR, 'uploads', str(owner.get('/api/auth/me').json['workspace']['id'])))), 0)
+
+        # Saving the receipt again skips what is already there and adds only new items.
+        save(owner, {**details, 'items': details['items'][:1]})
+        again = save(owner, details)
+        self.assertEqual(again.status_code, 201)
+        self.assertEqual(again.json['saved'], 2)
+        self.assertEqual(again.json['skipped'], ['Television'])
+
+    def test_card_can_be_read_again(self):
+        owner = new_family('reread@example.com', 'Reread Family')
+        upload(owner)
+        item_id = owner.get('/api/inventory').json['items'][0]['id']
+        self.assertEqual(owner.post(f'/api/inventory/{item_id}/read-warranty-card').status_code, 404, 'no card yet')
+
+        attach_card(owner, item_id)  # read fails in tests, like cards attached before cards were read
+        self.assertIsNone(owner.get('/api/inventory').json['items'][0]['warranty_months'])
+        receipts_routes.parse_warranty_card = lambda data, _f: (
+            {'warranty_months': 36, 'warranty_start_date': None, 'coverage_notes': None} if data == b'fake card'
+            else {'error': 'wrong file'})
+        try:
+            response = owner.post(f'/api/inventory/{item_id}/read-warranty-card')
+        finally:
+            receipts_routes.parse_warranty_card = _unreadable_card
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json['card_read'], 'the stored card file is what gets read')
+        self.assertEqual(owner.get('/api/inventory').json['items'][0]['warranty_months'], 36)
+
+        outsider = new_family('reread.outsider@example.com', 'Outsider Family')
+        self.assertEqual(outsider.post(f'/api/inventory/{item_id}/read-warranty-card').status_code, 404)
+
+    def test_unsubscribe_link_and_personal_setting(self):
+        import reminders
+        from datetime import date, timedelta
+        owner = new_family('unsub.owner@example.com', 'Unsub Family')
+        upload(owner)
+        item_id = owner.get('/api/inventory').json['items'][0]['id']
+        start = (date.today() + timedelta(days=10) - timedelta(days=365)).isoformat()
+        owner.patch(f'/api/inventory/{item_id}', json={'date_of_purchase': start})
+        settings = owner.get('/api/settings').json['settings']
+        settings.update({'reminder_recipients': 'unsub.owner@example.com, grandpa@example.com'})
+        owner.put('/api/settings', json=settings)
+
+        sent.clear()
+        owner.post('/api/reminders/send')
+        self.assertEqual(sorted(m['to'][0] for m in sent), ['grandpa@example.com', 'unsub.owner@example.com'],
+                         'one email per person')
+        grandpa_mail = next(m for m in sent if m['to'] == ['grandpa@example.com'])
+        link = grandpa_mail['headers']['List-Unsubscribe'].strip('<>')
+        self.assertIn(link, grandpa_mail['text'])
+        path = '/unsubscribe/' + link.rsplit('/unsubscribe/', 1)[1]
+
+        visitor = app_module.app.test_client()  # not signed in, like someone clicking in their inbox
+        page = visitor.get(path)
+        self.assertEqual(page.status_code, 200)
+        self.assertIn('grandpa@example.com', page.get_data(as_text=True))
+        sent.clear()
+        owner.post('/api/reminders/send')
+        self.assertEqual(len(sent), 2, 'just opening the link does not unsubscribe')
+
+        self.assertIn("unsubscribed", visitor.post(path).get_data(as_text=True))
+        sent.clear()
+        owner.post('/api/reminders/send')
+        self.assertEqual([m['to'] for m in sent], [['unsub.owner@example.com']])
+
+        tampered = path[:-3] + ('aaa' if not path.endswith('aaa') else 'bbb')
+        self.assertEqual(visitor.get(tampered).status_code, 404)
+        with app_module.app.app_context():
+            self.assertIsNone(reminders.read_unsubscribe_token('nonsense'))
+
+        # Anyone can switch reminders off (and on) for themselves from Settings.
+        self.assertTrue(owner.get('/api/me/reminders').json['subscribed'])
+        self.assertFalse(owner.put('/api/me/reminders', json={'subscribed': False}).json['subscribed'])
+        sent.clear()
+        response = owner.post('/api/reminders/send')
+        self.assertEqual(response.status_code, 400, 'everyone has unsubscribed')
+        self.assertEqual(sent, [])
+        visitor.post(path, data={'resubscribe': '1'})
+        owner.post('/api/reminders/send')
+        self.assertEqual([m['to'] for m in sent], [['grandpa@example.com']])
 
 
 if __name__ == '__main__':

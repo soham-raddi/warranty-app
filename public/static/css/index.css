@@ -1340,3 +1340,162 @@ body[data-theme="dark"] .settings-savebar {
 .data-row-danger strong {
     color: var(--bs-danger);
 }
+
+/* ---- Inventory toolbar, rows and actions menu ---- */
+.inventory-toolbar {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) repeat(3, minmax(0, 190px));
+    gap: 0.6rem;
+    padding: 1rem 1.25rem 0.5rem;
+}
+
+.inventory-search {
+    position: relative;
+}
+
+.inventory-search .bi-search {
+    color: var(--ink-500);
+    left: 0.8rem;
+    pointer-events: none;
+    position: absolute;
+    top: 50%;
+    transform: translateY(-50%);
+}
+
+.inventory-search .form-control {
+    padding-left: 2.2rem;
+}
+
+.inventory-count {
+    padding: 0 1.25rem 0.6rem;
+}
+
+.inventory-store {
+    max-width: 180px;
+}
+
+.inventory-table th:nth-child(4),
+.inventory-table td:nth-child(4) {
+    min-width: 210px;
+}
+
+.inventory-name {
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    display: -webkit-box;
+    max-width: 420px;
+    overflow: hidden;
+}
+
+.inventory-card-link {
+    color: var(--ink-500);
+    font-size: 0.8rem;
+    text-decoration: none;
+    white-space: nowrap;
+}
+
+.inventory-card-link:hover {
+    color: var(--brand);
+}
+
+a.inventory-card-link {
+    color: var(--brand);
+}
+
+.inventory-menu-btn {
+    background: transparent;
+    border-color: transparent;
+    color: var(--ink-500);
+}
+
+.inventory-menu-btn:hover,
+.inventory-menu-btn[aria-expanded="true"] {
+    background: var(--surface-2);
+    border-color: var(--line);
+    color: var(--ink-900);
+}
+
+.dropdown-menu .dropdown-item {
+    align-items: center;
+    display: flex;
+    gap: 0.6rem;
+    font-size: 0.92rem;
+    padding: 0.45rem 1rem;
+}
+
+.dropdown-menu .dropdown-item .bi {
+    color: var(--ink-500);
+    width: 1rem;
+}
+
+.dropdown-menu .dropdown-item.text-danger .bi {
+    color: inherit;
+}
+
+@media (max-width: 767.98px) {
+    .inventory-toolbar {
+        grid-template-columns: 1fr 1fr;
+        padding: 1rem 1rem 0.5rem;
+    }
+
+    .inventory-search {
+        grid-column: 1 / -1;
+    }
+
+    .inventory-toolbar #invSort {
+        grid-column: 1 / -1;
+    }
+
+    .inventory-count {
+        padding: 0 1rem 0.6rem;
+    }
+}
+
+/* ---- Receipt review ---- */
+.review-item {
+    background: var(--surface-2);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 0.75rem;
+    transition: opacity 0.15s ease;
+}
+
+.review-item.is-skipped {
+    opacity: 0.55;
+}
+
+.review-item.is-skipped .review-item-fields {
+    display: none;
+}
+
+/* ---- Menus and dialogs in dark mode ---- */
+body[data-theme="dark"] .dropdown-menu,
+body[data-theme="dark"] .modal-content {
+    background-color: var(--surface);
+    border-color: var(--line);
+    color: var(--ink-900);
+}
+
+body[data-theme="dark"] .dropdown-item {
+    color: var(--ink-900);
+}
+
+body[data-theme="dark"] .dropdown-item:hover,
+body[data-theme="dark"] .dropdown-item:focus {
+    background-color: var(--surface-2);
+    color: var(--ink-900);
+}
+
+body[data-theme="dark"] .dropdown-item.text-danger {
+    color: #f87171 !important;
+}
+
+body[data-theme="dark"] .dropdown-divider,
+body[data-theme="dark"] .modal-header,
+body[data-theme="dark"] .modal-footer {
+    border-color: var(--line);
+}
+
+body[data-theme="dark"] .modal-content .btn-close {
+    filter: invert(1) grayscale(100%) brightness(200%);
+}

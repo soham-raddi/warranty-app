@@ -233,6 +233,21 @@
                         <p class="small text-muted mb-0"><i class="bi bi-info-circle me-1"></i>Email reminders aren't available yet. Warranties that are about to expire show up on your dashboard under Needs Attention.</p>
                         {% endif %}
                     </fieldset>
+                    {% if email_enabled %}
+                    <!-- Personal choice, saved straight away; outside the shared settings so every member can change it. -->
+                    <div class="settings-pane pt-0">
+                        <div class="settings-group">
+                            <h3 class="settings-group-title mb-3">Your reminder emails</h3>
+                            <label class="settings-toggle">
+                                <input id="myRemindersToggle" type="checkbox" checked>
+                                <span>
+                                    <strong>Send reminder emails to me</strong>
+                                    <small>Only affects {{ current_user.email }}. Turn off to stop getting this workspace's warranty reminders.</small>
+                                </span>
+                            </label>
+                        </div>
+                    </div>
+                    {% endif %}
                 </div>
             </section>
 
@@ -623,6 +638,20 @@ window.addEventListener('hashchange', openTabFromHash);
 openTabFromHash();
 
 // ---- Unsaved changes ----
+const myRemindersToggle = document.getElementById('myRemindersToggle');
+if (myRemindersToggle) {
+    fetch('/api/me/reminders').then(res => res.json()).then(data => { myRemindersToggle.checked = Boolean(data.subscribed); }).catch(() => {});
+    myRemindersToggle.addEventListener('change', async () => {
+        try {
+            const data = await sendJson('/api/me/reminders', 'PUT', { subscribed: myRemindersToggle.checked });
+            showToast(data.subscribed ? "You'll get reminder emails." : "You won't get reminder emails from this workspace.", 'success');
+        } catch (e) {
+            myRemindersToggle.checked = !myRemindersToggle.checked;
+            showToast(e.message, 'danger');
+        }
+    });
+}
+
 const settingsFields = () => [...document.querySelectorAll('[data-settings-pane] input, [data-settings-pane] select, [data-settings-pane] textarea')];
 const fieldValue = field => (field.type === 'checkbox' ? String(field.checked) : field.value);
 let savedSnapshot = null;

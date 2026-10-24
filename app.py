@@ -109,7 +109,8 @@ app.register_blueprint(workspaces_bp)
 app.register_blueprint(cron_bp)
 
 # Paths anyone may open without signing in.
-PUBLIC_PATHS = ('/login', '/auth', '/static', '/privacy', '/terms', '/manifest.webmanifest', '/api/cron/')
+PUBLIC_PATHS = ('/login', '/auth', '/static', '/privacy', '/terms', '/manifest.webmanifest', '/api/cron/',
+                '/unsubscribe/')
 # Paths a signed-in person may use before they belong to any workspace.
 NO_WORKSPACE_PATHS = ('/welcome', '/api/workspaces', '/api/auth/me', '/api/account')
 UNSAFE_METHODS = {'POST', 'PUT', 'PATCH', 'DELETE'}
@@ -140,7 +141,7 @@ def enforce_authentication():
     if request.path.startswith(PUBLIC_PATHS):
         return None
 
-    is_api = request.path.startswith('/api/') or request.path == '/upload'
+    is_api = request.path.startswith('/api/')
     user_id = session.get('user_id')
     user = get_user_by_id(user_id) if user_id else None
     if user and not user.get('is_active'):

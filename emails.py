@@ -9,6 +9,7 @@ import os
 import requests
 
 RESEND_API_URL = 'https://api.resend.com/emails'
+RESEND_BATCH_URL = 'https://api.resend.com/emails/batch'
 RESEND_API_KEY = os.getenv('RESEND_API_KEY', '').strip()
 EMAIL_FROM = os.getenv('EMAIL_FROM', '').strip() or 'Digital Twin <onboarding@resend.dev>'
 EMAIL_ENABLED = bool(RESEND_API_KEY)
@@ -20,23 +21,15 @@ class EmailError(Exception):
     pass
 
 
-def send_email(to, subject, html_body, text_body, idempotency_key=None):
-    """Sends one email. `to` may be a string or a list (Resend allows up to 50). Raises EmailError on failure."""
+def _post(url, payload, idempotency_key=None):
     if not EMAIL_ENABLED:
         raise EmailError('Email is not set up on this site.')
-    recipients = [to] if isinstance(to, str) else list(to)
     headers = {'Authorization': f'Bearer {RESEND_API_KEY}', 'Content-Type': 'application/json'}
     if idempotency_key:
         # Resend ignores a repeated key for 24 hours, so a retried request never sends twice.
         headers['Idempotency-Key'] = idempotency_key[:256]
     try:
-        response = requests.post(RESEND_API_URL, timeout=TIMEOUT_SECONDS, headers=headers, json={
-            'from': EMAIL_FROM,
-            'to': recipients[:50],
-            'subject': subject,
-            'html': html_body,
-            'text': text_body,
-        })
+        response = requests.post(url, timeout=TIMEOUT_SECONDS, headers=headers, json=payload)
     except requests.RequestException as error:
         raise EmailError('Could not reach the email service.') from error
     if response.status_code >= 300:
@@ -45,7 +38,21 @@ def send_email(to, subject, html_body, text_body, idempotency_key=None):
             raise EmailError('The email service refused this address. A verified sending domain is needed to email '
                              'people other than the site owner.')
         raise EmailError('The email could not be sent. Please try again later.')
-    return response.json().get('id')
+    return response.json()
+
+
+def send_email(to, subject, html_body, text_body, idempotency_key=None):
+    """Sends one email. `to` may be a string or a list (Resend allows up to 50). Raises EmailError on failure."""
+    recipients = [to] if isinstance(to, str) else list(to)
+    return _post(RESEND_API_URL, {
+        'from': EMAIL_FROM, 'to': recipients[:50], 'subject': subject, 'html': html_body, 'text': text_body,
+    }, idempotency_key).get('id')
+
+
+def send_batch(messages, idempotency_key=None):
+    """Sends up to 100 separate emails in one request. Each message: to, subject, html, text, optional headers."""
+    payload = [{'from': EMAIL_FROM, **message} for message in messages[:100]]
+    return _post(RESEND_BATCH_URL, payload, idempotency_key)
 
 
 def _layout(title, body_html):
@@ -84,7 +91,7 @@ def invite_email(inviter_name, workspace_name, link, expires_on):
     return subject, _layout(f'Join {workspace_name}', body), text
 
 
-def reminder_email(workspace_name, items, app_url):
+def reminder_email(workspace_name, items, app_url, unsubscribe_url):
     """Returns (subject, html, text) listing warranties that are about to expire. items: dicts with
     item_name, brand, warranty_expires_on, days_remaining."""
     count = len(items)
@@ -105,8 +112,9 @@ def reminder_email(workspace_name, items, app_url):
             f'If something isn\'t working right, now is the time to claim.</p>'
             f'<table style="width:100%;border-collapse:collapse;">{"".join(rows)}</table>'
             + _button(app_url, 'Open Digital Twin') +
-            '<p style="font-size:13px;color:#64748b;">You get this because warranty reminders are turned on in your '
-            'workspace settings. The owner or an admin can turn them off in Settings &rarr; Alerts &amp; reminders.</p>')
+            '<p style="font-size:13px;color:#64748b;">You get this because warranty reminders are turned on for '
+            f'{html.escape(workspace_name)}. <a href="{html.escape(unsubscribe_url)}" style="color:#64748b;">'
+            'Unsubscribe from these reminders</a>.</p>')
     text = (f'These warranties in {workspace_name} are about to expire:\n\n' + '\n'.join(lines) +
-            f'\n\nOpen Digital Twin: {app_url}')
+            f'\n\nOpen Digital Twin: {app_url}\n\nUnsubscribe from these reminders: {unsubscribe_url}')
     return subject, _layout('Warranties ending soon', body), text

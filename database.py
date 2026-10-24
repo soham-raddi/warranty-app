@@ -239,6 +239,13 @@ def _schema_statements():
             sent_at TEXT NOT NULL DEFAULT ({now}),
             PRIMARY KEY (item_id, threshold_days)
         )''',
+        # People who unsubscribed from a workspace's reminder emails.
+        f'''CREATE TABLE IF NOT EXISTS email_optouts (
+            workspace_id INTEGER NOT NULL,
+            email TEXT NOT NULL,
+            created_at TEXT NOT NULL DEFAULT ({now}),
+            PRIMARY KEY (workspace_id, email)
+        )''',
         '''CREATE TABLE IF NOT EXISTS schema_meta (
             key TEXT PRIMARY KEY,
             value TEXT NOT NULL
@@ -278,7 +285,7 @@ _ADDED_COLUMNS = [
     ('workspace_invites', 'accepted_at TEXT'),
     ('workspace_invites', 'accepted_by INTEGER'),
 ]
-SCHEMA_VERSION = '2'
+SCHEMA_VERSION = '3'
 
 
 def _upgrade_old_sqlite_install():
@@ -812,7 +819,15 @@ def delete_appliance(workspace_id, item_id):
     cursor.execute('DELETE FROM service_history WHERE item_id = ?', (item_id,))
     cursor.execute('DELETE FROM reminder_log WHERE item_id = ?', (item_id,))
     conn.commit()
-    return True, row[0], row[1]
+    return True, (None if _receipt_file_in_use(row[0]) else row[0]), row[1]
+
+
+def _receipt_file_in_use(file_path):
+    """True when another item saved from the same receipt still uses this file."""
+    if not file_path:
+        return False
+    cursor.execute('SELECT 1 FROM appliances_v5 WHERE file_path = ? LIMIT 1', (file_path,))
+    return cursor.fetchone() is not None
 
 
 def get_appliance_file_paths(workspace_id, item_id):
@@ -1205,13 +1220,14 @@ def delete_workspace(workspace_id):
     """Deletes a workspace and everything in it. Returns the stored file references so callers can remove them."""
     cursor.execute('SELECT id, file_path, warranty_card_path FROM appliances_v5 WHERE workspace_id = ?', (workspace_id,))
     rows = cursor.fetchall()
-    files = [ref for _id, file_path, card_path in rows for ref in (file_path, card_path) if ref]
+    files = list(dict.fromkeys(ref for _id, file_path, card_path in rows for ref in (file_path, card_path) if ref))
     item_ids = [row[0] for row in rows]
     if item_ids:
         marks = ', '.join('?' for _ in item_ids)
         cursor.execute(f'DELETE FROM service_history WHERE item_id IN ({marks})', item_ids)
         cursor.execute(f'DELETE FROM reminder_log WHERE item_id IN ({marks})', item_ids)
-    for table in ('appliances_v5', 'chat_messages', 'workspace_settings', 'workspace_invites', 'workspace_members'):
+    for table in ('appliances_v5', 'chat_messages', 'workspace_settings', 'workspace_invites', 'workspace_members',
+                  'email_optouts'):
         cursor.execute(f'DELETE FROM {table} WHERE workspace_id = ?', (workspace_id,))
     cursor.execute('DELETE FROM workspaces WHERE id = ?', (workspace_id,))
     conn.commit()
@@ -1310,4 +1326,22 @@ def record_reminders_sent(item_thresholds):
             'INSERT OR IGNORE INTO reminder_log (item_id, threshold_days, sent_at) VALUES (?, ?, ?)',
             (item_id, threshold_days, now)
         )
+    conn.commit()
+
+
+def opted_out_emails(workspace_id):
+    cursor.execute('SELECT email FROM email_optouts WHERE workspace_id = ?', (workspace_id,))
+    return {row[0] for row in cursor.fetchall()}
+
+
+def set_reminder_optout(workspace_id, email, opted_out):
+    """Unsubscribes (or resubscribes) one email address from a workspace's reminder emails."""
+    clean_email = email.strip().lower()
+    if opted_out:
+        cursor.execute(
+            'INSERT OR IGNORE INTO email_optouts (workspace_id, email, created_at) VALUES (?, ?, ?)',
+            (workspace_id, clean_email, datetime.now().isoformat(timespec='seconds'))
+        )
+    else:
+        cursor.execute('DELETE FROM email_optouts WHERE workspace_id = ? AND email = ?', (workspace_id, clean_email))
     conn.commit()

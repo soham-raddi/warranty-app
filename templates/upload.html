@@ -5,7 +5,7 @@
 {% block content %}
 <section class="page-hero mb-4">
     <h1 class="page-title">Upload Receipt</h1>
-    <p class="page-subtitle">Scan a new receipt and let AI extract the product and warranty details.</p>
+    <p class="page-subtitle">Scan a receipt, check what the AI found, then save. Receipts with several products work too.</p>
 </section>
 
 <section class="card section-card shadow-sm border-0 mx-auto" style="max-width: 640px;">
@@ -24,37 +24,58 @@
         </button>
         <button class="btn btn-primary btn-lg w-100 d-flex align-items-center justify-content-center gap-2" id="upBtn" onclick="uploadReceipt()">
             <span class="spinner-border spinner-border-sm d-none" id="upLoader" aria-hidden="true"></span>
-            <span id="upBtnLabel">Scan and Save</span>
+            <span id="upBtnLabel">Scan receipt</span>
         </button>
+        <div id="uploadResult" class="alert alert-success d-flex align-items-center justify-content-between gap-2 mt-3 mb-0 d-none" role="status">
+            <span id="uploadResultText"></span>
+            <a href="{{ url_for('pages.inventory_page') }}" class="btn btn-sm btn-success text-nowrap">View inventory</a>
+        </div>
     </div>
 </section>
 {% endblock %}
 
 {% block modals %}
-<div class="modal fade" id="summaryModal" tabindex="-1" aria-labelledby="summaryModalLabel" aria-hidden="true">
-  <div class="modal-dialog modal-dialog-centered">
-    <div class="modal-content">
-      <div class="modal-header bg-success text-white">
-        <h5 class="modal-title" id="summaryModalLabel"><i class="bi bi-check-circle-fill"></i> Digitization Complete</h5>
-        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+<div class="modal fade" id="reviewModal" tabindex="-1" aria-labelledby="reviewModalLabel" aria-hidden="true" data-bs-backdrop="static">
+  <div class="modal-dialog modal-dialog-centered modal-dialog-scrollable modal-lg">
+    <form class="modal-content border-0 shadow" id="reviewForm">
+      <div class="modal-header">
+        <div>
+          <h5 class="modal-title" id="reviewModalLabel"><i class="bi bi-clipboard-check"></i> Check before saving</h5>
+          <div class="small text-muted">Fix anything the scan got wrong. Nothing is saved until you click Save.</div>
+        </div>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
       </div>
       <div class="modal-body">
-        <p>Your document has been successfully processed and added to your Digital Twin.</p>
-        <ul class="list-group list-group-flush">
-            <li class="list-group-item"><strong>Item:</strong> <span id="modalItemName"></span></li>
-            <li class="list-group-item"><strong>Category:</strong> <span id="modalCategory"></span></li>
-            <li class="list-group-item"><strong>Store:</strong> <span id="modalStore"></span></li>
-            <li class="list-group-item"><strong>Date:</strong> <span id="modalDate"></span></li>
-            <li class="list-group-item"><strong>Invoice No:</strong> <span id="modalInvoice"></span></li>
-            <li class="list-group-item"><strong>Warranty Info:</strong> <span id="modalWarranty"></span></li>
-            <li class="list-group-item"><strong>Total Amount:</strong> <span id="modalPrice"></span></li>
-        </ul>
+        <h6 class="fw-semibold mb-2">Receipt</h6>
+        <div class="row g-2 mb-4">
+          <div class="col-md-5">
+            <label class="form-label small mb-1" for="reviewStore">Store</label>
+            <input id="reviewStore" class="form-control form-control-sm" maxlength="200">
+          </div>
+          <div class="col-6 col-md-3">
+            <label class="form-label small mb-1" for="reviewDate">Purchase date</label>
+            <input id="reviewDate" type="date" class="form-control form-control-sm">
+          </div>
+          <div class="col-6 col-md-4">
+            <label class="form-label small mb-1" for="reviewInvoice">Invoice number</label>
+            <input id="reviewInvoice" class="form-control form-control-sm" maxlength="100">
+          </div>
+          <div class="col-12 small text-muted" id="reviewTotal"></div>
+        </div>
+        <div class="d-flex align-items-baseline justify-content-between mb-2">
+          <h6 class="fw-semibold mb-0" id="reviewItemsTitle">Items</h6>
+          <span class="small text-muted">Untick anything you don't want to track.</span>
+        </div>
+        <div id="reviewItems" class="d-grid gap-2"></div>
       </div>
       <div class="modal-footer">
-        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Upload Another</button>
-        <a href="{{ url_for('pages.inventory_page') }}" class="btn btn-primary">View Inventory</a>
+        <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+        <button type="submit" class="btn btn-primary d-flex align-items-center gap-2" id="reviewSaveBtn">
+          <span class="spinner-border spinner-border-sm d-none" id="reviewSaveLoader" aria-hidden="true"></span>
+          <span id="reviewSaveLabel">Save</span>
+        </button>
       </div>
-    </div>
+    </form>
   </div>
 </div>
 {% endblock %}

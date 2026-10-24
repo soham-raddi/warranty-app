@@ -142,7 +142,8 @@ Set `RESEND_API_KEY` (and `EMAIL_FROM`) to turn on:
 - **Emailed invites:** "Email the invite to them" when inviting, and "Email again" on pending invites.
 - **Warranty reminders:** in **Settings → Alerts & reminders**, an owner or admin turns on reminders and picks the window
   (30 days by default). The daily job emails each workspace's members (or the chosen recipients) when a warranty enters
-  the window, then again 7 days and 1 day before it ends. Each reminder is sent once. "Send reminders now" emails the
+  the window, then again 7 days and 1 day before it ends. Each reminder is sent once, as a separate email per person with
+  an unsubscribe link (people can also turn reminders off for themselves in Settings). "Send reminders now" emails the
   current list right away.
 
 Resend only delivers to other people's inboxes from a **domain you have verified** in Resend. Until then, the default
@@ -173,9 +174,9 @@ throwaway** database (it is wiped first).
 **templates/index.html:** The single-page frontend UI, featuring Bootstrap 5 styling, interactive tabs, and a rich post-upload summary modal.
 
 ### How to Use
-* **Upload Tab:** Select a receipt image or PDF and click "Scan & Save". The AI will process the document in seconds and display a rich summary popup containing the exact invoice number, store name, and warranty duration.
+* **Upload Tab:** Select a receipt image or PDF and click "Scan receipt". The AI reads every product on it (fees like delivery are left out), then shows a review screen to fix anything and untick what you don't want before saving. Items already in your inventory are unticked automatically.
 
-* **Inventory Tab:** View all your digitized assets in a clean table. Check warranty statuses (Active/Expired), download original documents, or delete records.
+* **Inventory Tab:** Search, filter by category or warranty status, and sort your items. Each item's ⋯ menu lets you edit it, see its service history, open or download the receipt, attach, replace or re-read the warranty card (which sets the real warranty length), or delete it.
 
 * **Assistant Tab:** Chat naturally with your Digital Twin.
 

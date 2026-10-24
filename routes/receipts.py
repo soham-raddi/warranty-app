@@ -1,4 +1,6 @@
+import json
 import uuid
+from datetime import datetime
 
 from flask import Blueprint, g, jsonify, request
 from werkzeug.utils import secure_filename
@@ -32,6 +34,8 @@ EDITABLE_FIELDS = {
     'date_of_purchase': 10, 'total_amount': 40, 'store_name': 200, 'store_contact': 200,
     'invoice_number': 100, 'warranty_info': 500, 'return_policy': 500,
 }
+SAVE_FIELDS = {**EDITABLE_FIELDS, 'payment_method': 60, 'tax_amount': 40}
+MAX_ITEMS_PER_RECEIPT = 20
 
 
 def _file_extension(filename):
@@ -59,41 +63,111 @@ def _serve(ref):
     return storage.serve(ref, as_attachment=_file_extension(ref or '') not in ALLOWED_EXTENSIONS)
 
 
-@receipts_bp.route('/upload', methods=['POST'])
+def _clean_fields(payload, allowed):
+    """Validates submitted item details. Returns (changes, error message)."""
+    changes = {}
+    for field, max_length in allowed.items():
+        if field in payload:
+            value = str(payload.get(field) or '').strip()[:max_length]
+            changes[field] = value or None
+
+    if 'item_name' in changes and not changes['item_name']:
+        return None, 'Item name cannot be empty'
+    if changes.get('date_of_purchase'):
+        try:
+            datetime.strptime(changes['date_of_purchase'], '%Y-%m-%d')
+        except ValueError:
+            return None, 'Purchase date must be a valid date'
+
+    if 'warranty_months' in payload:
+        raw = payload.get('warranty_months')
+        if raw in (None, ''):
+            changes['warranty_months'] = None  # fall back to the workspace's default period
+        else:
+            try:
+                months = int(raw)
+            except (TypeError, ValueError):
+                return None, 'Warranty length must be a whole number of months'
+            if not 1 <= months <= 360:
+                return None, 'Warranty length must be between 1 and 360 months'
+            changes['warranty_months'] = months
+    return changes, None
+
+
+def _duplicate_of(receipt, item):
+    return find_duplicate_receipt(g.workspace_id, receipt.get('invoice_number'), receipt.get('store_name'),
+                                  item.get('item_name'))
+
+
+@receipts_bp.route('/api/receipts/scan', methods=['POST'])
 @limit('scan', per_workspace=True, hourly=30, daily=100)
-def upload_file():
+def scan_receipt():
+    """Reads a receipt for the person to review. Nothing is saved until they confirm."""
     if 'receipt_image' not in request.files:
         return jsonify({"error": "No file uploaded"}), 400
-
     file = request.files['receipt_image']
     error = _validate_upload(file)
     if error:
         return jsonify({"error": error}), 400
 
-    # Read the receipt first; only keep the file if it turns out to be a new, valid receipt.
-    data = file.read()
-    extracted_data = parse_receipt_image_to_json(data, file.filename)
-    if "error" in extracted_data:
-        return jsonify({"error": extracted_data["error"]}), 400
+    result = parse_receipt_image_to_json(file.read(), file.filename)
+    if "error" in result:
+        return jsonify({"error": result["error"]}), 400
+    for item in result['items']:
+        item['duplicate_item_id'] = _duplicate_of(result['receipt'], item)
+    return jsonify(result)
 
-    duplicate_id = find_duplicate_receipt(
-        g.workspace_id, extracted_data.get('invoice_number'), extracted_data.get('store_name'), extracted_data.get('item_name')
-    )
-    if duplicate_id:
-        return jsonify({
-            "error": f"This receipt is already in your inventory (invoice {extracted_data.get('invoice_number')}).",
-            "duplicate_item_id": duplicate_id
-        }), 409
+
+@receipts_bp.route('/api/receipts/save', methods=['POST'])
+@limit('save', per_workspace=True, hourly=60, daily=300)
+def save_receipt():
+    """Saves the reviewed items. The receipt file is sent again so nothing is stored for scans never saved."""
+    file = request.files.get('receipt_image')
+    error = _validate_upload(file)
+    if error:
+        return jsonify({"error": error}), 400
+    try:
+        details = json.loads(request.form.get('details') or '{}')
+        receipt, items = dict(details.get('receipt') or {}), list(details.get('items') or [])
+    except (ValueError, TypeError, AttributeError):
+        return jsonify({"error": "The receipt details could not be read. Please scan again."}), 400
+    if not items:
+        return jsonify({"error": "Choose at least one item to save."}), 400
+    if len(items) > MAX_ITEMS_PER_RECEIPT:
+        return jsonify({"error": f"A receipt can have at most {MAX_ITEMS_PER_RECEIPT} items."}), 400
+
+    rows, skipped = [], []
+    for item in items:
+        if not isinstance(item, dict):
+            return jsonify({"error": "The receipt details could not be read. Please scan again."}), 400
+        merged = {**receipt, **item, 'total_amount': item.get('amount') or None}
+        row, error = _clean_fields(merged, SAVE_FIELDS)
+        if error:
+            return jsonify({"error": f"{item.get('item_name') or 'Item'}: {error}"}), 400
+        if not row.get('item_name'):
+            return jsonify({"error": "Every item needs a name."}), 400
+        if _duplicate_of(row, row):
+            skipped.append(row['item_name'])
+            continue
+        row['price'] = row['total_amount']
+        rows.append(row)
+
+    if not rows:
+        return jsonify({"error": "These items are already in your inventory.", "skipped": skipped}), 409
 
     try:
-        extracted_data['file_path'] = storage.save(data, _storage_key(file.filename), file.mimetype)
+        file_path = storage.save(file.read(), _storage_key(file.filename), file.mimetype)
     except storage.StorageError:
         return jsonify({"error": "Could not store the receipt. Please try again."}), 502
+    for row in rows:
+        row['file_path'] = file_path
+        save_receipt_to_db(g.workspace_id, row)
 
-    if save_receipt_to_db(g.workspace_id, extracted_data):
-        return jsonify(extracted_data)
-    storage.delete(extracted_data['file_path'])
-    return jsonify({"error": "Database save failed"}), 500
+    saved = len(rows)
+    message = f"Saved {saved} item{'s' if saved != 1 else ''} to your inventory."
+    if skipped:
+        message += f" Skipped {len(skipped)} already saved: {', '.join(skipped)}."
+    return jsonify({"message": message, "saved": saved, "skipped": skipped}), 201
 
 
 @receipts_bp.route('/api/inventory', methods=['GET'])
@@ -122,34 +196,9 @@ def edit_item(item_id):
     if not item_exists(g.workspace_id, item_id):
         return jsonify({'error': 'Inventory item not found'}), 404
 
-    payload = request.json or {}
-    changes = {}
-    for field, max_length in EDITABLE_FIELDS.items():
-        if field in payload:
-            value = str(payload.get(field) or '').strip()[:max_length]
-            changes[field] = value or None
-
-    if 'item_name' in changes and not changes['item_name']:
-        return jsonify({'error': 'Item name cannot be empty'}), 400
-    if changes.get('date_of_purchase'):
-        from datetime import datetime
-        try:
-            datetime.strptime(changes['date_of_purchase'], '%Y-%m-%d')
-        except ValueError:
-            return jsonify({'error': 'Purchase date must be a valid date'}), 400
-
-    if 'warranty_months' in payload:
-        raw = payload.get('warranty_months')
-        if raw in (None, ''):
-            changes['warranty_months'] = None  # fall back to the workspace's default period
-        else:
-            try:
-                months = int(raw)
-            except (TypeError, ValueError):
-                return jsonify({'error': 'Warranty length must be a whole number of months'}), 400
-            if not 1 <= months <= 360:
-                return jsonify({'error': 'Warranty length must be between 1 and 360 months'}), 400
-            changes['warranty_months'] = months
+    changes, error = _clean_fields(request.json or {}, EDITABLE_FIELDS)
+    if error:
+        return jsonify({'error': error}), 400
 
     update_appliance(g.workspace_id, item_id, changes)
     return jsonify({'message': 'Item updated', 'item': get_appliance(g.workspace_id, item_id)})
@@ -207,24 +256,42 @@ def attach_warranty_card(item_id):
     if previous_card_path and previous_card_path != ref:
         storage.delete(previous_card_path)
 
-    # Read the card so the item uses its real warranty length instead of the workspace default.
-    card = parse_warranty_card(data, file.filename)
+    return jsonify(_read_card_into_item(item_id, data, file.filename, attached=True))
+
+
+@receipts_bp.route('/api/inventory/<int:item_id>/read-warranty-card', methods=['POST'])
+@limit('card', per_workspace=True, hourly=30, daily=100)
+def reread_warranty_card(item_id):
+    """Reads an already attached card again, e.g. one attached before cards were read automatically."""
+    _, card_path = get_appliance_file_paths(g.workspace_id, item_id)
+    if not card_path:
+        return jsonify({"error": "This item has no warranty card yet."}), 404
+    try:
+        data = storage.read(card_path)
+    except (storage.StorageError, OSError, ValueError):
+        return jsonify({"error": "Could not open the stored warranty card. Try replacing it."}), 502
+    return jsonify(_read_card_into_item(item_id, data, card_path, attached=False))
+
+
+def _read_card_into_item(item_id, data, filename, attached):
+    """Reads a warranty card so the item uses its real warranty length instead of the workspace default."""
+    prefix = "Warranty card attached, but" if attached else "The warranty card was read again, but"
+    card = parse_warranty_card(data, filename)
     if card.get('error'):
-        return jsonify({"message": "Warranty card attached, but it couldn't be read. "
-                                   "You can set the warranty length with Edit.", "card_read": False})
+        return {"message": f"{prefix} it couldn't be read. You can set the warranty length with Edit.",
+                "card_read": False}
     changes = apply_warranty_card_details(g.workspace_id, item_id, months=card['warranty_months'],
                                           start_date=card['warranty_start_date'], notes=card['coverage_notes'])
     if 'warranty_months' not in changes:
-        return jsonify({"message": "Warranty card attached, but no warranty length was found on it. "
-                                   "The default period is still used; you can change it with Edit.",
-                        "card_read": False})
+        return {"message": f"{prefix} no warranty length was found on it. The default period is still used; "
+                           "you can change it with Edit.", "card_read": False}
 
     item = next((i for i in get_inventory_analytics(g.workspace_id)[0] if i['id'] == item_id), {})
     months = changes['warranty_months']
     length = f"{months // 12}-year" if months % 12 == 0 else f"{months}-month"
     expiry = f", now valid until {item['warranty_expires_on']}" if item.get('warranty_expires_on') else ''
-    return jsonify({"message": f"Warranty card read: {length} warranty{expiry}.", "card_read": True,
-                    "warranty_months": months, "warranty_expires_on": item.get('warranty_expires_on')})
+    return {"message": f"Warranty card read: {length} warranty{expiry}.", "card_read": True,
+            "warranty_months": months, "warranty_expires_on": item.get('warranty_expires_on')}
 
 
 @receipts_bp.route('/api/inventory/<int:item_id>/service-history', methods=['GET'])

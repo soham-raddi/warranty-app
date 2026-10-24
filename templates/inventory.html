@@ -5,18 +5,18 @@
 {% block content %}
 <section class="page-hero mb-4">
     <h1 class="page-title">Inventory</h1>
-    <p class="page-subtitle">Track all registered items, their receipts, and warranty card status.</p>
+    <p class="page-subtitle">Everything you've bought, with its receipt, warranty and service history.</p>
 </section>
 
-<section class="row g-4 mb-4">
-    <div class="col-md-6">
+<section class="row g-3 mb-4">
+    <div class="col-6">
         <div class="card stat-card bg-primary p-4 shadow-sm">
             <h6>Total Investment</h6>
             <h1 id="s-tot" class="fw-bold">—</h1>
             <i class="bi bi-wallet2"></i>
         </div>
     </div>
-    <div class="col-md-6">
+    <div class="col-6">
         <div class="card stat-card bg-success p-4 shadow-sm">
             <h6>Active Warranties</h6>
             <h1 id="s-act" class="fw-bold">0</h1>
@@ -26,23 +26,46 @@
 </section>
 
 <section class="card section-card shadow-sm border-0">
+    <div class="inventory-toolbar">
+        <div class="inventory-search">
+            <i class="bi bi-search" aria-hidden="true"></i>
+            <input id="invSearch" type="search" class="form-control" placeholder="Search name, brand, store, serial…" aria-label="Search inventory">
+        </div>
+        <select id="invCategory" class="form-select" aria-label="Filter by category">
+            <option value="">All categories</option>
+        </select>
+        <select id="invStatus" class="form-select" aria-label="Filter by warranty">
+            <option value="">All warranties</option>
+            <option value="Active">Active</option>
+            <option value="Expiring Soon">Expiring soon</option>
+            <option value="Expired">Expired</option>
+            <option value="Unknown">Unknown</option>
+        </select>
+        <select id="invSort" class="form-select" aria-label="Sort by">
+            <option value="newest">Newest first</option>
+            <option value="oldest">Oldest first</option>
+            <option value="expiry">Warranty ending soonest</option>
+            <option value="amount">Highest amount</option>
+            <option value="name">Name A–Z</option>
+        </select>
+    </div>
+    <div class="inventory-count small text-muted" id="invCount" aria-live="polite"></div>
     <div class="card-body p-0">
         <div class="table-responsive">
-            <table class="table table-hover mb-0 align-middle">
+            <table class="table table-hover mb-0 align-middle inventory-table">
                 <thead class="bg-light">
                     <tr>
-                        <th class="ps-4">Product</th>
-                        <th>Category</th>
-                        <th>Date</th>
-                        <th>Amount</th>
+                        <th class="ps-4">Item</th>
+                        <th class="d-none d-md-table-cell">Purchased</th>
+                        <th class="text-end">Amount</th>
                         <th>Warranty</th>
-                        <th class="text-end pe-4">Actions</th>
+                        <th class="text-end pe-3"><span class="visually-hidden">Actions</span></th>
                     </tr>
                 </thead>
                 <tbody id="invTable"></tbody>
             </table>
         </div>
-        <p class="small text-muted px-4 py-2 mb-0 border-top">* Warranty end date uses the default period from Settings. Use <i class="bi bi-pencil"></i> to set an item's exact warranty length.</p>
+        <p class="small text-muted px-4 py-2 mb-0 border-top">* Uses the default warranty period from Settings. Attach the warranty card, or choose Edit, to set the exact length.</p>
     </div>
 </section>
 

@@ -1,8 +1,16 @@
-from flask import Blueprint, g, jsonify, request
+from flask import Blueprint, g, jsonify, render_template, request
 
 import emails
 import reminders
-from database import CURRENCY_SYMBOLS, get_all_settings, set_setting_value
+from database import (
+    CURRENCY_SYMBOLS,
+    get_all_settings,
+    get_workspace,
+    opted_out_emails,
+    set_reminder_optout,
+    set_setting_value,
+)
+from ratelimit import limit
 from .auth import role_required
 from .workspaces import EMAIL_PATTERN
 
@@ -121,3 +129,32 @@ def send_reminders_now():
     people = 'person' if result['sent'] == 1 else 'people'
     return jsonify({'message': f"Reminder about {result['items']} warranty(s) emailed to {result['sent']} {people}.",
                     **result})
+
+
+@settings_bp.route('/api/me/reminders', methods=['GET', 'PUT'])
+def my_reminder_emails():
+    """Each person can stop (or restart) reminder emails for themselves, whatever their role."""
+    email = g.current_user['email']
+    if request.method == 'PUT':
+        subscribed = bool((request.json or {}).get('subscribed'))
+        set_reminder_optout(g.workspace_id, email, not subscribed)
+    subscribed = email.lower() not in opted_out_emails(g.workspace_id)
+    return jsonify({'subscribed': subscribed, 'email': email})
+
+
+@settings_bp.route('/unsubscribe/<token>', methods=['GET', 'POST'])
+@limit('unsubscribe', per_ip=True, hourly=60, daily=300)
+def unsubscribe(token):
+    """The link in every reminder email. Mail apps may POST to it directly ("one-click unsubscribe")."""
+    details = reminders.read_unsubscribe_token(token)
+    workspace = get_workspace(details[0]) if details else None
+    if not workspace:
+        return render_template('unsubscribe.html', state='invalid'), 404
+    email = details[1]
+    context = {'email': email, 'workspace_name': workspace['name']}
+    if request.method == 'GET':
+        # Opening the link only asks; link scanners in mail systems must not unsubscribe people.
+        return render_template('unsubscribe.html', state='confirm', **context)
+    resubscribe = request.form.get('resubscribe') == '1'
+    set_reminder_optout(workspace['id'], email, not resubscribe)
+    return render_template('unsubscribe.html', state='resubscribed' if resubscribe else 'unsubscribed', **context)

@@ -388,6 +388,16 @@ async function readJsonResponse(res) {
     }
 }
 
+// The scanned file and what the AI read from it, kept until the person saves or cancels the review.
+let pendingReceipt = null;
+
+function setUploadBusy(busy) {
+    const btn = byId('upBtn');
+    if (btn) btn.disabled = busy;
+    byId('upLoader')?.classList.toggle('d-none', !busy);
+    setText('upBtnLabel', busy ? 'Reading the receipt...' : 'Scan receipt');
+}
+
 async function uploadReceipt() {
     const fileInput = byId('receiptFile');
     if (!fileInput) return;
@@ -400,46 +410,124 @@ async function uploadReceipt() {
         return showToast(e.message, 'danger');
     }
 
-    const btn = byId('upBtn');
-    const loader = byId('upLoader');
-    if (btn) btn.disabled = true;
-    if (loader) loader.classList.remove('d-none');
-    setText('upBtnLabel', 'Scanning...');
-
+    byId('uploadResult')?.classList.add('d-none');
+    setUploadBusy(true);
     const formData = new FormData();
     formData.append('receipt_image', file);
-
     try {
-        const res = await fetch('/upload', { method: 'POST', body: formData });
+        const res = await fetch('/api/receipts/scan', { method: 'POST', body: formData });
         const data = await readJsonResponse(res);
-
-        if (res.ok) {
-            setText('modalItemName', data.item_name || 'N/A');
-            setText('modalCategory', data.category || 'N/A');
-            setText('modalStore', data.store_name || 'N/A');
-            setText('modalDate', formatPlainDate(data.date_of_purchase) || 'Not found');
-            setText('modalInvoice', data.invoice_number || 'N/A');
-            setText('modalWarranty', data.warranty_info || 'Not specified on receipt');
-            setText('modalPrice', data.total_amount ? money(data.total_amount) : 'Not found');
-
-            const modalEl = byId('summaryModal');
-            if (modalEl) {
-                bootstrap.Modal.getOrCreateInstance(modalEl).show();
-            }
-
-            fileInput.value = '';
-            showSelectedReceipt(null);
-        } else {
-            showToast(data.error || 'Upload failed.', 'danger');
-        }
+        if (!res.ok) return showToast(data.error || 'Could not read this receipt.', 'danger');
+        pendingReceipt = { file, receipt: data.receipt || {}, items: data.items || [] };
+        openReceiptReview();
     } catch (e) {
-        showToast('Upload failed. Make sure the server is running.', 'danger');
+        showToast('Upload failed. Check your connection and try again.', 'danger');
     } finally {
-        if (btn) btn.disabled = false;
-        if (loader) loader.classList.add('d-none');
-        setText('upBtnLabel', 'Scan and Save');
+        setUploadBusy(false);
     }
 }
+
+function reviewField(index, name, label, value, attrs = '', col = 'col-6 col-md-3') {
+    const id = `review-${index}-${name}`;
+    return `<div class="${col}">
+        <label class="form-label small mb-1" for="${id}">${label}</label>
+        <input id="${id}" data-field="${name}" class="form-control form-control-sm" value="${escapeHtml(value ?? '')}" ${attrs}>
+    </div>`;
+}
+
+function openReceiptReview() {
+    const { receipt, items } = pendingReceipt;
+    byId('reviewStore').value = receipt.store_name || '';
+    byId('reviewDate').value = receipt.date_of_purchase || '';
+    byId('reviewInvoice').value = receipt.invoice_number || '';
+    setText('reviewTotal', receipt.total_amount ? `Receipt total: ${money(receipt.total_amount)}` : '');
+    setText('reviewItemsTitle', items.length === 1 ? 'Item' : `${items.length} items found`);
+
+    byId('reviewItems').innerHTML = items.map((item, index) => `
+        <div class="review-item" data-index="${index}">
+            <div class="d-flex align-items-start gap-2 mb-2">
+                <input class="form-check-input mt-2 flex-shrink-0" type="checkbox" data-field="include" id="review-${index}-include"
+                       ${item.duplicate_item_id ? '' : 'checked'} aria-label="Save this item">
+                <div class="flex-grow-1">
+                    <input data-field="item_name" class="form-control form-control-sm fw-semibold" value="${escapeHtml(item.item_name || '')}"
+                           maxlength="200" aria-label="Item name" required>
+                    ${item.duplicate_item_id ? '<span class="badge text-bg-warning mt-1">Already in your inventory</span>' : ''}
+                </div>
+            </div>
+            <div class="row g-2 review-item-fields">
+                ${reviewField(index, 'brand', 'Brand', item.brand, 'maxlength="100"')}
+                ${reviewField(index, 'category', 'Category', item.category, 'maxlength="100"')}
+                ${reviewField(index, 'amount', 'Amount', item.amount, 'inputmode="decimal" maxlength="40"')}
+                ${reviewField(index, 'warranty_months', 'Warranty (months)', item.warranty_months, 'type="number" min="1" max="360" placeholder="Default"')}
+                ${reviewField(index, 'model_number', 'Model', item.model_number, 'maxlength="100"', 'col-6')}
+                ${reviewField(index, 'serial_number', 'Serial number', item.serial_number, 'maxlength="100"', 'col-6')}
+            </div>
+        </div>`).join('');
+    updateReviewSaveLabel();
+    bootstrap.Modal.getOrCreateInstance(byId('reviewModal')).show();
+}
+
+function selectedReviewItems() {
+    return [...document.querySelectorAll('#reviewItems .review-item')].filter(row => row.querySelector('[data-field="include"]').checked);
+}
+
+function updateReviewSaveLabel() {
+    const count = selectedReviewItems().length;
+    setText('reviewSaveLabel', count > 1 ? `Save ${count} items` : 'Save');
+    const btn = byId('reviewSaveBtn');
+    if (btn) btn.disabled = count === 0;
+    document.querySelectorAll('#reviewItems .review-item').forEach(row => {
+        row.classList.toggle('is-skipped', !row.querySelector('[data-field="include"]').checked);
+    });
+}
+
+async function saveReviewedReceipt(event) {
+    event.preventDefault();
+    if (!pendingReceipt) return;
+    const rows = selectedReviewItems();
+    const items = rows.map(row => {
+        const source = pendingReceipt.items[Number(row.dataset.index)] || {};
+        const item = { warranty_info: source.warranty_info || '' };
+        row.querySelectorAll('input[data-field]:not([data-field="include"])').forEach(input => { item[input.dataset.field] = input.value.trim(); });
+        return item;
+    });
+    if (items.some(item => !item.item_name)) return showToast('Every item you save needs a name.', 'warning');
+    const receipt = {
+        ...pendingReceipt.receipt,
+        store_name: byId('reviewStore').value.trim(),
+        date_of_purchase: byId('reviewDate').value,
+        invoice_number: byId('reviewInvoice').value.trim(),
+    };
+
+    const formData = new FormData();
+    formData.append('receipt_image', pendingReceipt.file);
+    formData.append('details', JSON.stringify({ receipt, items }));
+    const btn = byId('reviewSaveBtn');
+    btn.disabled = true;
+    byId('reviewSaveLoader').classList.remove('d-none');
+    try {
+        const res = await fetch('/api/receipts/save', { method: 'POST', body: formData });
+        const data = await readJsonResponse(res);
+        if (!res.ok) return showToast(data.error || 'Could not save these items.', 'danger');
+        bootstrap.Modal.getOrCreateInstance(byId('reviewModal')).hide();
+        pendingReceipt = null;
+        const fileInput = byId('receiptFile');
+        if (fileInput) fileInput.value = '';
+        showSelectedReceipt(null);
+        setText('uploadResultText', data.message);
+        byId('uploadResult')?.classList.remove('d-none');
+    } catch (e) {
+        showToast('Could not save these items. Check your connection and try again.', 'danger');
+    } finally {
+        btn.disabled = false;
+        byId('reviewSaveLoader').classList.add('d-none');
+    }
+}
+
+byId('reviewForm')?.addEventListener('submit', saveReviewedReceipt);
+byId('reviewItems')?.addEventListener('change', event => {
+    if (event.target.matches('[data-field="include"]')) updateReviewSaveLabel();
+});
 
 function showSelectedReceipt(file) {
     const label = byId('dropZoneFile');
@@ -486,11 +574,13 @@ function initDropZone() {
     });
 }
 
+let inventoryItems = [];
+
 async function loadInventory() {
     const tbody = byId('invTable');
     if (!tbody) return;
 
-    tbody.innerHTML = stateRow(6, 'Loading inventory...');
+    if (!inventoryItems.length) tbody.innerHTML = stateRow(5, 'Loading inventory...');
 
     try {
         const res = await fetch('/api/inventory');
@@ -498,48 +588,152 @@ async function loadInventory() {
 
         setText('s-tot', money(data.total_spent));
         setText('s-act', data.active_warranties || 0);
-
-        if (!data.items || data.items.length === 0) {
-            tbody.innerHTML = stateRow(6, 'No items yet. Upload a receipt to add your first item.');
-            return;
-        }
-
-        tbody.innerHTML = data.items.map(i => {
-            const itemId = Number(i.id);
-            const expiry = i.warranty_expires_on
-                ? `<small class="text-muted d-block" title="${i.warranty_months ? `${Number(i.warranty_months)}-month warranty` : 'Using the default warranty period'}">Warranty until ${escapeHtml(formatPlainDate(i.warranty_expires_on))}${i.warranty_months ? '' : ' *'}</small>`
-                : '';
-            return `
-            <tr>
-                <td class="ps-4">
-                    <a href="/files/receipt/${itemId}" target="_blank" class="item-link" title="Click to view receipt">
-                        <strong>${escapeHtml(i.item_name || 'Unknown')}</strong><br>
-                        <small class="text-muted">${escapeHtml(i.brand || 'N/A')}</small>
-                    </a>
-                </td>
-                <td><span class="badge bg-light text-dark border">${escapeHtml(i.category || 'N/A')}</span></td>
-                <td class="text-nowrap">${escapeHtml(formatPlainDate(i.date_of_purchase) || 'Unknown')}${expiry}</td>
-                <td class="fw-bold text-nowrap">${money(i.total_amount || 0)}</td>
-                <td>
-                    <div class="d-flex flex-wrap gap-1 align-items-center">
-                        ${warrantyBadge(i.warranty_status)}
-                        ${Number(i.has_warranty_card || 0)
-                            ? `<a href="/files/warranty-card/${itemId}" target="_blank" class="badge text-bg-info text-decoration-none" title="View attached warranty card">Card Attached</a>`
-                            : `<button type="button" data-action="attach-card" data-item-id="${itemId}" class="btn btn-sm btn-outline-warning py-0 px-2" title="Attach warranty card">Attach Card</button>`}
-                    </div>
-                </td>
-                <td class="text-end pe-4">
-                    <div class="btn-group">
-                        <button type="button" class="btn btn-sm btn-outline-primary" data-action="edit-item" data-item-id="${itemId}" title="Edit details"><i class="bi bi-pencil"></i></button>
-                        <button type="button" class="btn btn-sm btn-outline-info" data-action="service-history" data-item-id="${itemId}" data-item-name="${escapeHtml(i.item_name || 'Item')}" title="View service history"><i class="bi bi-clock-history"></i></button>
-                        <a href="/files/receipt/${itemId}" download class="btn btn-sm btn-outline-secondary" title="Download receipt"><i class="bi bi-download"></i></a>
-                        ${canManageWorkspace() ? `<button type="button" data-action="delete-item" data-item-id="${itemId}" class="btn btn-sm btn-outline-danger" title="Delete Record"><i class="bi bi-trash"></i></button>` : ''}
-                    </div>
-                </td>
-            </tr>`;
-        }).join('');
+        inventoryItems = Array.isArray(data.items) ? data.items : [];
+        fillCategoryFilter();
+        renderInventory();
     } catch (e) {
-        tbody.innerHTML = stateRow(6, 'Could not load inventory.', true);
+        tbody.innerHTML = stateRow(5, 'Could not load inventory.', true);
+    }
+}
+
+function fillCategoryFilter() {
+    const select = byId('invCategory');
+    if (!select) return;
+    const current = select.value;
+    const categories = [...new Set(inventoryItems.map(i => (i.category || '').trim()).filter(Boolean))]
+        .sort((a, b) => a.localeCompare(b));
+    select.innerHTML = '<option value="">All categories</option>' +
+        categories.map(c => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join('');
+    select.value = categories.includes(current) ? current : '';
+}
+
+const INVENTORY_SORTS = {
+    newest: (a, b) => purchaseKey(b).localeCompare(purchaseKey(a)),
+    oldest: (a, b) => (purchaseKey(a) || '9999').localeCompare(purchaseKey(b) || '9999'),
+    // Still-active warranties ending soonest first, then expired ones, then unknown.
+    expiry: (a, b) => expiryRank(a) - expiryRank(b),
+    amount: (a, b) => (parseAmount(b.total_amount) || 0) - (parseAmount(a.total_amount) || 0),
+    name: (a, b) => String(a.item_name || '').localeCompare(String(b.item_name || '')),
+};
+
+function purchaseKey(item) {
+    return /^\d{4}-\d{2}-\d{2}$/.test(String(item.date_of_purchase || '')) ? item.date_of_purchase : '';
+}
+
+function expiryRank(item) {
+    const days = item.days_remaining;
+    if (typeof days !== 'number') return 1e9;
+    return days >= 0 ? days : 1e6 - days;
+}
+
+function filteredInventory() {
+    const query = (byId('invSearch')?.value || '').trim().toLowerCase();
+    const category = byId('invCategory')?.value || '';
+    const status = byId('invStatus')?.value || '';
+    const sort = INVENTORY_SORTS[byId('invSort')?.value] || INVENTORY_SORTS.newest;
+    const searchable = ['item_name', 'brand', 'model_number', 'serial_number', 'category', 'store_name', 'invoice_number'];
+    return inventoryItems
+        .filter(i => !category || (i.category || '').trim() === category)
+        .filter(i => !status || (i.warranty_status || 'Unknown') === status)
+        .filter(i => !query || searchable.some(field => String(i[field] || '').toLowerCase().includes(query)))
+        .sort(sort);
+}
+
+function renderInventory() {
+    const tbody = byId('invTable');
+    if (!tbody) return;
+    if (!inventoryItems.length) {
+        setText('invCount', '');
+        tbody.innerHTML = stateRow(5, 'No items yet. Upload a receipt to add your first item.');
+        return;
+    }
+    const items = filteredInventory();
+    setText('invCount', items.length === inventoryItems.length
+        ? `${items.length} item${items.length === 1 ? '' : 's'}`
+        : `Showing ${items.length} of ${inventoryItems.length} items`);
+    if (!items.length) {
+        tbody.innerHTML = `<tr><td colspan="5" class="text-center text-muted py-4">No items match your search.
+            <button type="button" class="btn btn-link btn-sm p-0 align-baseline" data-action="clear-inventory-filters">Clear filters</button></td></tr>`;
+        return;
+    }
+    tbody.innerHTML = items.map(renderInventoryRow).join('');
+}
+
+function renderInventoryRow(i) {
+    const itemId = Number(i.id);
+    const name = escapeHtml(i.item_name || 'Unknown');
+    const subline = [i.brand, i.category].filter(Boolean).map(escapeHtml).join(' · ');
+    const hasCard = Boolean(Number(i.has_warranty_card || 0));
+    const usesDefault = !i.warranty_months;
+    const expiry = i.warranty_expires_on
+        ? `<small class="text-muted text-nowrap" title="${usesDefault ? 'Using the default warranty period' : `${Number(i.warranty_months)}-month warranty`}">until ${escapeHtml(formatPlainDate(i.warranty_expires_on))}${usesDefault ? ' *' : ''}</small>`
+        : '';
+    const card = hasCard
+        ? `<a href="/files/warranty-card/${itemId}" target="_blank" class="inventory-card-link" title="View warranty card"><i class="bi bi-file-earmark-check"></i> Card</a>`
+        : `<button type="button" class="btn btn-link inventory-card-link p-0" data-action="attach-card" data-item-id="${itemId}" title="Attach the warranty card"><i class="bi bi-plus-circle"></i> Card</button>`;
+    const cardMenu = hasCard
+        ? `<li><a class="dropdown-item" href="/files/warranty-card/${itemId}" target="_blank"><i class="bi bi-file-earmark-check"></i> View warranty card</a></li>
+           <li><button type="button" class="dropdown-item" data-action="reread-card" data-item-id="${itemId}"><i class="bi bi-arrow-repeat"></i> Read card again</button></li>
+           <li><button type="button" class="dropdown-item" data-action="attach-card" data-item-id="${itemId}"><i class="bi bi-upload"></i> Replace card</button></li>`
+        : `<li><button type="button" class="dropdown-item" data-action="attach-card" data-item-id="${itemId}"><i class="bi bi-upload"></i> Attach warranty card</button></li>`;
+    return `
+    <tr>
+        <td class="ps-4">
+            <div class="fw-semibold inventory-name" title="${name}">${name}</div>
+            ${subline ? `<small class="text-muted">${subline}</small>` : ''}
+        </td>
+        <td class="d-none d-md-table-cell text-nowrap">
+            ${escapeHtml(formatPlainDate(i.date_of_purchase) || 'Unknown')}
+            ${i.store_name ? `<small class="text-muted d-block text-truncate inventory-store">${escapeHtml(i.store_name)}</small>` : ''}
+        </td>
+        <td class="text-end fw-semibold text-nowrap">${money(i.total_amount || 0)}</td>
+        <td>
+            <div class="d-flex flex-wrap align-items-center column-gap-2">${warrantyBadge(i.warranty_status)} ${expiry}</div>
+            ${card}
+        </td>
+        <td class="text-end pe-3">
+            <div class="dropdown">
+                <button class="btn btn-sm btn-light inventory-menu-btn" type="button" data-bs-toggle="dropdown" aria-expanded="false"
+                        data-bs-popper-config='{"strategy":"fixed"}' aria-label="Actions for ${name}" title="Actions">
+                    <i class="bi bi-three-dots"></i>
+                </button>
+                <ul class="dropdown-menu dropdown-menu-end shadow-sm">
+                    <li><button type="button" class="dropdown-item" data-action="edit-item" data-item-id="${itemId}"><i class="bi bi-pencil"></i> Edit details</button></li>
+                    <li><button type="button" class="dropdown-item" data-action="service-history" data-item-id="${itemId}" data-item-name="${name}"><i class="bi bi-clock-history"></i> Service history</button></li>
+                    <li><hr class="dropdown-divider"></li>
+                    <li><a class="dropdown-item" href="/files/receipt/${itemId}" target="_blank"><i class="bi bi-receipt"></i> View receipt</a></li>
+                    <li><a class="dropdown-item" href="/files/receipt/${itemId}" download><i class="bi bi-download"></i> Download receipt</a></li>
+                    <li><hr class="dropdown-divider"></li>
+                    ${cardMenu}
+                    ${canManageWorkspace() ? `<li><hr class="dropdown-divider"></li>
+                    <li><button type="button" class="dropdown-item text-danger" data-action="delete-item" data-item-id="${itemId}"><i class="bi bi-trash"></i> Delete item</button></li>` : ''}
+                </ul>
+            </div>
+        </td>
+    </tr>`;
+}
+
+function initInventoryFilters() {
+    ['invSearch', 'invCategory', 'invStatus', 'invSort'].forEach(id => {
+        byId(id)?.addEventListener(id === 'invSearch' ? 'input' : 'change', renderInventory);
+    });
+}
+
+function clearInventoryFilters() {
+    ['invSearch', 'invCategory', 'invStatus'].forEach(id => { if (byId(id)) byId(id).value = ''; });
+    renderInventory();
+}
+
+async function rereadWarrantyCard(id) {
+    showToast('Reading the warranty card again…', 'info');
+    try {
+        const res = await fetch(`/api/inventory/${Number(id)}/read-warranty-card`, { method: 'POST' });
+        const data = await readJsonResponse(res);
+        if (!res.ok) return showToast(data.error || 'Could not read the warranty card.', 'danger');
+        showToast(data.message, data.card_read ? 'success' : 'warning');
+        await Promise.all([loadInventory(), loadDashboard()]);
+    } catch (e) {
+        showToast('Could not read the warranty card.', 'danger');
     }
 }
 
@@ -1170,6 +1364,12 @@ document.addEventListener('click', (event) => {
         case 'edit-item':
             openEditItem(itemId);
             break;
+        case 'reread-card':
+            rereadWarrantyCard(itemId);
+            break;
+        case 'clear-inventory-filters':
+            clearInventoryFilters();
+            break;
         case 'open-conversation':
             openConversation(target.dataset.conversationId);
             break;
@@ -1235,6 +1435,7 @@ document.addEventListener('submit', async (event) => {
 
 window.onload = async () => {
     initDropZone();
+    initInventoryFilters();
     await loadSettings();
     await Promise.all([loadDashboard(), loadInventory()]);
     await loadSettingsIntoForm();

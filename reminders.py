@@ -6,11 +6,15 @@ daily cron job never repeats itself.
 """
 from datetime import date
 
+from flask import current_app
+from itsdangerous import BadSignature, URLSafeSerializer
+
 import emails
 from database import (
     get_all_settings,
     get_inventory_analytics,
     get_workspace,
+    opted_out_emails,
     record_reminders_sent,
     reminder_already_sent,
     workspace_member_emails,
@@ -39,9 +43,28 @@ def _stage_for(days_remaining, window):
 
 
 def recipients_for(workspace_id, settings):
-    """The workspace's chosen recipients, or every member when none are set."""
+    """The workspace's chosen recipients, or every member when none are set, minus anyone who unsubscribed."""
     chosen = parse_recipients(settings.get('reminder_recipients'))
-    return (chosen or workspace_member_emails(workspace_id))[:MAX_RECIPIENTS]
+    unsubscribed = opted_out_emails(workspace_id)
+    people = [email.lower() for email in (chosen or workspace_member_emails(workspace_id))]
+    return [email for email in dict.fromkeys(people) if email not in unsubscribed][:MAX_RECIPIENTS]
+
+
+def _serializer():
+    return URLSafeSerializer(current_app.secret_key, salt='reminder-unsubscribe')
+
+
+def unsubscribe_token(workspace_id, email):
+    return _serializer().dumps([workspace_id, email.lower()])
+
+
+def read_unsubscribe_token(token):
+    """Returns (workspace_id, email) from an unsubscribe link, or None if the link was tampered with."""
+    try:
+        workspace_id, email = _serializer().loads(token)
+        return int(workspace_id), str(email)
+    except (BadSignature, TypeError, ValueError):
+        return None
 
 
 def send_workspace_reminders(workspace_id, app_url, only_new=True):
@@ -71,11 +94,19 @@ def send_workspace_reminders(workspace_id, app_url, only_new=True):
 
     due.sort(key=lambda item: item['days_remaining'])
     workspace = get_workspace(workspace_id) or {'name': 'your workspace'}
-    subject, html_body, text_body = emails.reminder_email(workspace['name'], due, app_url)
+    # One email per person, each with its own unsubscribe link (also offered as one-click in mail apps).
+    messages = []
+    for email in recipients:
+        unsubscribe_url = f"{app_url.rstrip('/')}/unsubscribe/{unsubscribe_token(workspace_id, email)}"
+        subject, html_body, text_body = emails.reminder_email(workspace['name'], due, app_url, unsubscribe_url)
+        messages.append({'to': [email], 'subject': subject, 'html': html_body, 'text': text_body, 'headers': {
+            'List-Unsubscribe': f'<{unsubscribe_url}>',
+            'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click',
+        }})
     key = None
     if only_new:
         # The same reminders for the same day are never sent twice, even if the cron job is retried.
         key = f"reminders-{workspace_id}-{date.today().isoformat()}-" + '-'.join(f'{i}.{s}' for i, s in stages)
-    emails.send_email(recipients, subject, html_body, text_body, idempotency_key=key)
+    emails.send_batch(messages, idempotency_key=key)
     record_reminders_sent(stages)
     return {'sent': len(recipients), 'items': len(due), 'window': window}

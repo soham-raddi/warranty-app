@@ -27,11 +27,13 @@ def get_client():
 VISION_MODEL = os.getenv("GROQ_VISION_MODEL", "qwen/qwen3.8-27b")
 CHAT_MODEL = os.getenv("GROQ_CHAT_MODEL", "openai/gpt-oss-120b")
 
+# Details shared by everything on one receipt, and details of each purchased product.
 RECEIPT_FIELDS = [
-    "item_name", "brand", "model_number", "serial_number", "category", "date_of_purchase",
-    "price", "tax_amount", "total_amount", "payment_method", "store_name", "store_contact",
-    "invoice_number", "warranty_info", "return_policy",
+    "date_of_purchase", "store_name", "store_contact", "invoice_number", "payment_method",
+    "total_amount", "tax_amount", "return_policy",
 ]
+ITEM_FIELDS = ["item_name", "brand", "model_number", "serial_number", "category", "amount", "warranty_info"]
+MAX_ITEMS = 20
 
 # Placeholder answers models give for missing data; stored as empty instead.
 MISSING_VALUE_MARKERS = {
@@ -75,58 +77,61 @@ def encode_image(data, filename):
     return encoded_images
 
 
+def _clean_text(value):
+    if isinstance(value, (dict, list)):
+        value = json.dumps(value)
+    value = str(value).strip() if value is not None else ""
+    return None if value.lower() in MISSING_VALUE_MARKERS else value
+
+
+def _clean_months(value):
+    """A warranty length only if it is a sensible whole number of months (1 month to 30 years)."""
+    try:
+        months = int(float(value))
+    except (TypeError, ValueError):
+        return None
+    return months if 1 <= months <= 360 else None
+
+
+def _clean_date(value):
+    value = _clean_text(value)
+    try:
+        datetime.strptime(value or "", "%Y-%m-%d")
+    except ValueError:
+        return None
+    return value
+
+
 def _clean_receipt_data(raw):
     """Keeps only known fields, blanks placeholder values and drops dates that are not YYYY-MM-DD."""
-    data = {}
-    for field in RECEIPT_FIELDS:
-        value = raw.get(field)
-        if isinstance(value, (dict, list)):
-            value = json.dumps(value)
-        value = str(value).strip() if value is not None else ""
-        data[field] = None if value.lower() in MISSING_VALUE_MARKERS else value
+    receipt = {field: _clean_text(raw.get(field)) for field in RECEIPT_FIELDS}
+    receipt["date_of_purchase"] = _clean_date(raw.get("date_of_purchase"))
 
-    if data["date_of_purchase"]:
-        try:
-            datetime.strptime(data["date_of_purchase"], "%Y-%m-%d")
-        except ValueError:
-            data["date_of_purchase"] = None
-
-    # Keep a warranty length only if it is a sensible whole number of months (1 month to 30 years).
-    try:
-        months = int(float(raw.get("warranty_months")))
-        data["warranty_months"] = months if 1 <= months <= 360 else None
-    except (TypeError, ValueError):
-        data["warranty_months"] = None
-    return data
+    items = []
+    raw_items = raw.get("items") if isinstance(raw.get("items"), list) else [raw]
+    for raw_item in raw_items[:MAX_ITEMS]:
+        if not isinstance(raw_item, dict):
+            continue
+        item = {field: _clean_text(raw_item.get(field)) for field in ITEM_FIELDS}
+        item["warranty_months"] = _clean_months(raw_item.get("warranty_months"))
+        if item["item_name"]:
+            items.append(item)
+    # With a single product, its amount is what was paid for the whole receipt.
+    if len(items) == 1 and receipt["total_amount"]:
+        items[0]["amount"] = receipt["total_amount"]
+    return {"receipt": receipt, "items": items}
 
 
-def parse_receipt_image_to_json(data, filename):
+def _ask_vision_model(prompt, data, filename):
+    """Sends document pages with a prompt and returns the model's JSON object, or {"error": ...}."""
     try:
         image_list = encode_image(data, filename)
     except Exception as e:
         return {"error": f"Failed to read file: {e}"}
 
-    prompt = (
-        "Analyze these document pages carefully. They belong to a single invoice or receipt.\n"
-        "1. If the document is NOT a receipt, bill, or invoice, return: {\"error\": \"NOT_A_RECEIPT\"}\n"
-        "2. Identify the PRIMARY purchased item. If the invoice lists multiple items, extract the details for the main/highest-value product. "
-        "Strict Rule: Do NOT extract supplementary charges (like shipping, handling, platform fees, bags, or tips) as the primary item.\n"
-        "3. Extract the following details: item_name, brand, model_number, serial_number, "
-        "category (Use broad categories like 'Electronic Gadgets', 'Kitchen Appliances', 'Apparel', 'Automotive', etc.), "
-        "date_of_purchase (YYYY-MM-DD), price, tax_amount, total_amount (the grand total of the entire invoice), payment_method, "
-        "store_name (The overall retailer or marketplace name), store_contact, "
-        "invoice_number, warranty_info, return_policy, "
-        "warranty_months (the warranty length as a whole number of months, e.g. 12 for '1 year'; null if not stated).\n"
-        "Use null for any field that is not present on the document; never guess or write placeholders like 'not found'.\n"
-        "Return ONLY valid JSON. Do not add any conversational text or Markdown formatting."
-    )
-
     content_payload = [{"type": "text", "text": prompt}]
     for base64_image, mime_type in image_list:
-        content_payload.append({
-            "type": "image_url",
-            "image_url": {"url": f"data:{mime_type};base64,{base64_image}"}
-        })
+        content_payload.append({"type": "image_url", "image_url": {"url": f"data:{mime_type};base64,{base64_image}"}})
 
     try:
         chat_completion = get_client().chat.completions.create(
@@ -147,53 +152,54 @@ def parse_receipt_image_to_json(data, filename):
         text = text.split(f"{marker}json")[1].split(marker)[0]
     elif marker in text:
         text = text.split(marker)[1].split(marker)[0]
-
     try:
         raw = json.loads(text.strip())
     except json.JSONDecodeError:
         return {"error": "The AI returned an unreadable response. Please try uploading the document again."}
-
     if not isinstance(raw, dict):
         return {"error": "The AI returned an unexpected response. Please try uploading the document again."}
+    return raw
+
+
+def parse_receipt_image_to_json(data, filename):
+    """Reads a receipt. Returns {"receipt": shared details, "items": [products]} or {"error": ...}."""
+    prompt = (
+        "Analyze these document pages carefully. They belong to a single invoice or receipt.\n"
+        "1. If the document is NOT a receipt, bill, or invoice, return: {\"error\": \"NOT_A_RECEIPT\"}\n"
+        "2. Extract the receipt details: date_of_purchase (YYYY-MM-DD), store_name (the overall retailer or "
+        "marketplace name), store_contact, invoice_number, payment_method, total_amount (the grand total of the "
+        "entire invoice), tax_amount, return_policy.\n"
+        "3. List every purchased PRODUCT in \"items\", most expensive first. Strict rule: do NOT list "
+        "supplementary charges (shipping, handling, platform fees, bags, tips, discounts) as items. For each item: "
+        "item_name, brand, model_number, serial_number, category (broad, like 'Electronic Gadgets', "
+        "'Kitchen Appliances', 'Apparel', 'Automotive'), amount (that line's total as printed, including its tax if "
+        "shown per line), warranty_info, warranty_months (the warranty length as a whole number of months, e.g. 12 "
+        "for '1 year'; null if not stated).\n"
+        "Use null for any field that is not present on the document; never guess or write placeholders like 'not found'.\n"
+        "Return ONLY valid JSON shaped like {\"date_of_purchase\": ..., ..., \"items\": [{\"item_name\": ..., ...}]}."
+    )
+    raw = _ask_vision_model(prompt, data, filename)
     if raw.get("error"):
         if raw["error"] == "NOT_A_RECEIPT":
             return {"error": "This doesn't look like a receipt or invoice. Please upload a purchase receipt."}
         return {"error": str(raw["error"])}
 
-    data = _clean_receipt_data(raw)
-    if not data["item_name"]:
+    result = _clean_receipt_data(raw)
+    if not result["items"]:
         return {"error": "Couldn't identify the purchased item on this document."}
-    return data
+    return result
 
 
 def _clean_card_data(raw):
     """Keeps a sensible warranty length, a valid start date and short notes from a warranty card reading."""
-    try:
-        months = int(float(raw.get("warranty_months")))
-        months = months if 1 <= months <= 360 else None
-    except (TypeError, ValueError):
-        months = None
-
-    start_date = str(raw.get("warranty_start_date") or "").strip()
-    try:
-        datetime.strptime(start_date, "%Y-%m-%d")
-    except ValueError:
-        start_date = None
-
-    notes = str(raw.get("coverage_notes") or "").strip()
-    if notes.lower() in MISSING_VALUE_MARKERS:
-        notes = None
-    return {"warranty_months": months, "warranty_start_date": start_date, "coverage_notes": notes}
+    return {"warranty_months": _clean_months(raw.get("warranty_months")),
+            "warranty_start_date": _clean_date(raw.get("warranty_start_date")),
+            "coverage_notes": _clean_text(raw.get("coverage_notes"))}
 
 
 def parse_warranty_card(data, filename):
     """Reads a warranty card or certificate. Returns warranty_months, warranty_start_date and coverage_notes
     (each may be None), or {"error": ...} when the file can't be read."""
-    try:
-        image_list = encode_image(data, filename)
-    except Exception as e:
-        return {"error": f"Failed to read file: {e}"}
-
     prompt = (
         "This is a product warranty card, warranty certificate or guarantee document.\n"
         "Extract:\n"
@@ -207,24 +213,7 @@ def parse_warranty_card(data, filename):
         "Use null for anything not on the document; never guess.\n"
         "Return ONLY valid JSON with exactly these keys."
     )
-    content_payload = [{"type": "text", "text": prompt}]
-    for base64_image, mime_type in image_list:
-        content_payload.append({"type": "image_url", "image_url": {"url": f"data:{mime_type};base64,{base64_image}"}})
-
-    try:
-        chat_completion = get_client().chat.completions.create(
-            model=VISION_MODEL,
-            messages=[{"role": "user", "content": content_payload}],
-            temperature=0.1,
-            response_format={"type": "json_object"},
-        )
-        raw = json.loads(chat_completion.choices[0].message.content.strip())
-    except RuntimeError as e:
-        return {"error": str(e)}
-    except Exception as e:
-        print(f"Groq warranty card error: {e}")
+    raw = _ask_vision_model(prompt, data, filename)
+    if raw.get("error"):
         return {"error": "The AI service could not read this warranty card."}
-
-    if not isinstance(raw, dict):
-        return {"error": "The AI returned an unexpected response."}
     return _clean_card_data(raw)
