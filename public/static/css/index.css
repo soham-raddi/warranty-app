@@ -1378,11 +1378,10 @@ body[data-theme="dark"] .modal-content .btn-close {
 
 .ai-main-head {
     align-items: center;
-    border-bottom: 1px solid var(--line);
     display: flex;
     gap: 0.5rem;
     min-height: 54px;
-    padding: 0.6rem 1.25rem;
+    padding: 0.6rem 1.5rem;
 }
 
 .ai-main-title {
@@ -1406,10 +1405,12 @@ body[data-theme="dark"] .modal-content .btn-close {
 }
 
 .ai-thread {
+    display: flex;
     flex: 1;
+    flex-direction: column;
     min-height: 0;
     overflow-y: auto;
-    padding: 1.5rem 1.25rem;
+    padding: 0.5rem 1.5rem 1.5rem;
 }
 
 .ai-thread-inner {
@@ -1417,7 +1418,8 @@ body[data-theme="dark"] .modal-content .btn-close {
     flex-direction: column;
     gap: 1.1rem;
     margin: 0 auto;
-    max-width: 760px;
+    max-width: 880px;
+    width: 100%;
 }
 
 .ai-thread-status {
@@ -1581,11 +1583,11 @@ body[data-theme="dark"] .modal-content .btn-close {
     display: flex;
     flex-direction: column;
     justify-content: center;
-    margin: 0 auto;
-    max-width: 620px;
-    min-height: 100%;
+    margin: auto;
+    max-width: 720px;
     padding: 1rem 0;
     text-align: center;
+    width: 100%;
 }
 
 .ai-welcome-icon {
@@ -1648,7 +1650,7 @@ body[data-theme="dark"] .modal-content .btn-close {
 }
 
 .ai-composer {
-    padding: 0.75rem 1.25rem 1rem;
+    padding: 0.5rem 1.5rem 1rem;
 }
 
 .ai-composer-box {
@@ -1660,7 +1662,7 @@ body[data-theme="dark"] .modal-content .btn-close {
     display: flex;
     gap: 0.5rem;
     margin: 0 auto;
-    max-width: 760px;
+    max-width: 880px;
     padding: 0.45rem 0.45rem 0.45rem 1rem;
     transition: border-color 0.15s ease, box-shadow 0.15s ease;
 }
@@ -1702,14 +1704,13 @@ body[data-theme="dark"] .modal-content .btn-close {
     color: var(--ink-500);
     font-size: 0.72rem;
     margin: 0.5rem auto 0;
-    max-width: 760px;
+    max-width: 880px;
     text-align: center;
 }
 
 @media (max-width: 991.98px) {
     .ai-shell {
         grid-template-columns: minmax(0, 1fr);
-        height: calc(100dvh - 200px);
     }
 
     .ai-sidebar {
@@ -1747,4 +1748,60 @@ body[data-theme="dark"] .modal-content .btn-close {
 body[data-reduced-motion="1"] .ai-typing span {
     animation: none;
     opacity: 0.6;
+}
+
+/* The assistant fills the window: wider than other pages, and as tall as the space between header and footer. */
+.page-assistant {
+    height: 100dvh;
+}
+
+.page-assistant .app-header {
+    margin-bottom: 0.75rem;
+}
+
+.page-assistant .app-main {
+    display: flex;
+    flex-direction: column;
+    max-width: 1680px;
+    min-height: 0;
+    padding-bottom: 0.75rem !important;
+}
+
+.page-assistant .ai-shell {
+    box-shadow: none;
+    flex: 1;
+    height: auto;
+    min-height: 480px;
+}
+
+.page-assistant .app-header .container,
+.page-assistant .app-footer .container {
+    max-width: 1680px;
+}
+
+@media (min-width: 992px) {
+    .page-assistant .ai-welcome-icon {
+        border-radius: 18px;
+        font-size: 1.8rem;
+        height: 64px;
+        width: 64px;
+    }
+
+    .page-assistant .ai-welcome-title {
+        font-size: 1.9rem;
+    }
+
+    .page-assistant .ai-welcome-text {
+        font-size: 1.05rem;
+        max-width: 520px;
+    }
+
+    .page-assistant .ai-suggestion {
+        font-size: 0.95rem;
+        padding: 1rem 1.1rem;
+    }
+
+    .page-assistant .ai-composer textarea {
+        font-size: 1.02rem;
+    }
 }

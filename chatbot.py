@@ -63,7 +63,10 @@ def ask_digital_twin(user_message, chat_history, workspace_id):
         "CRITICAL: Always read the 'total_amount' and 'price' fields in the JSON when a user asks about spending or costs. Do not claim data is missing if it exists in the JSON. "
         "Each item's 'warranty_status', 'warranty_expires_on' and 'days_remaining' are computed by the app and are authoritative; "
         "use them directly when asked whether something is under warranty. A status of 'Unknown' means the purchase date is missing. "
-        "'has_warranty_card' is 1 when a warranty card file is attached and 0 when it is not."
+        "'has_warranty_card' is 1 when a warranty card file is attached and 0 when it is not. "
+        "You can only answer questions: you cannot set reminders, send emails, or change items or settings, so never "
+        "offer to. If someone wants to be reminded before a warranty ends, tell them they can turn on warranty "
+        "reminder emails in Settings > Alerts & reminders."
     )
     
     messages = [{"role": "system", "content": sys_prompt}]
