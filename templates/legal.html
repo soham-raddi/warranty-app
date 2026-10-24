@@ -123,7 +123,7 @@
         <h2>What Digital Twin stores</h2>
         <ul>
             <li>Your Google account name, email address and profile picture, used to sign you in.</li>
-            <li>The receipts, warranty cards and item details you or your family upload, and any service history you add.</li>
+            <li>The receipts, warranty cards, forwarded order emails and item details you or your family add, and any service history.</li>
             <li>Your workspace settings, membership and invite records, and the messages you send to the assistant.</li>
         </ul>
 
@@ -140,7 +140,8 @@
             <li><strong>Google</strong> for sign-in.</li>
             <li><strong>Groq</strong> reads receipt and warranty card images and answers the assistant's questions, so it receives those images and, when you chat, your inventory and messages.</li>
             {% if email_enabled %}<li><strong>Resend</strong> delivers invite and warranty reminder emails, so it receives
-                the recipient's email address and the item names in the reminder.</li>{% endif %}
+                the recipient's email address and the item names in the reminder{% if email_import_enabled %}. It also receives
+                the order emails you forward to your workspace's address, which are then read by Groq{% endif %}.</li>{% endif %}
             <li><strong>Supabase</strong> stores the database and uploaded files; <strong>Vercel</strong> hosts the app.</li>
         </ul>
 

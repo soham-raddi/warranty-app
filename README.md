@@ -112,7 +112,8 @@ and the `uploads/` folder.
 2. **Vercel environment variables** (Project Settings -> Environment Variables, Production): `SECRET_KEY`,
    `GROQ_API_KEY`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `DATABASE_URL`, `SUPABASE_URL`,
    `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_BUCKET=receipts`, `CRON_SECRET`, `CONTACT_EMAIL`, and optionally
-   `RESEND_API_KEY` and `EMAIL_FROM` for emails (see Emails below). See `.env.example`.
+   `RESEND_API_KEY` and `EMAIL_FROM` for emails, plus `INBOUND_EMAIL_DOMAIN` and `RESEND_WEBHOOK_SECRET` for importing
+   order emails (see below). See `.env.example`.
 3. **Google Cloud:** add `https://<your-app>.vercel.app/auth/callback` as an authorized redirect URI, then publish
    the OAuth consent screen with `https://<your-app>.vercel.app/` as the homepage and
    `https://<your-app>.vercel.app/privacy` as the privacy policy.
@@ -150,6 +151,22 @@ Resend only delivers to other people's inboxes from a **domain you have verified
 `onboarding@resend.dev` sender can only email the address of your own Resend account.
 
 Without `RESEND_API_KEY`, the email options are hidden and invite links are shared by hand.
+
+### Importing order emails
+Each workspace gets a private forwarding address (shown on the **Upload** page). Forward an order confirmation from
+any shop to it, or set up a Gmail filter that forwards them automatically, and the purchase appears under
+**From your email** to check and save. If the email has a PDF or image invoice attached, that is read and kept as
+the receipt; otherwise the email itself is saved as a PDF. Only email sent or forwarded by members of the workspace
+is accepted, and an owner or admin can replace the address at any time.
+
+To turn it on, receiving must be set up in Resend (no custom domain needed):
+1. Use a Resend API key with **full access** (receiving needs it) as `RESEND_API_KEY`.
+2. In Resend, open **Emails > Receiving**, choose **Receiving address** from the menu and copy the domain part
+   (`<id>.resend.app`) into `INBOUND_EMAIL_DOMAIN`.
+3. Under **Webhooks**, add `https://<your-app>/api/inbound/email` for the `email.received` event and copy its
+   signing secret into `RESEND_WEBHOOK_SECRET`.
+
+Purchases nobody reviews are removed after 30 days by the daily job.
 
 Upgrading from a version without workspaces is automatic: existing data becomes the first workspace, owned by `OWNER_EMAIL` (or the previous owner).
 

@@ -443,6 +443,11 @@ function openReceiptReview() {
     byId('reviewInvoice').value = receipt.invoice_number || '';
     setText('reviewTotal', receipt.total_amount ? `Receipt total: ${money(receipt.total_amount)}` : '');
     setText('reviewItemsTitle', items.length === 1 ? 'Item' : `${items.length} items found`);
+    const note = byId('reviewNote');
+    if (note) {
+        note.classList.toggle('d-none', !pendingReceipt.note);
+        note.querySelector('.alert').textContent = pendingReceipt.note || '';
+    }
 
     byId('reviewItems').innerHTML = items.map((item, index) => `
         <div class="review-item" data-index="${index}">
@@ -500,21 +505,35 @@ async function saveReviewedReceipt(event) {
         invoice_number: byId('reviewInvoice').value.trim(),
     };
 
-    const formData = new FormData();
-    formData.append('receipt_image', pendingReceipt.file);
-    formData.append('details', JSON.stringify({ receipt, items }));
     const btn = byId('reviewSaveBtn');
     btn.disabled = true;
     byId('reviewSaveLoader').classList.remove('d-none');
     try {
-        const res = await fetch('/api/receipts/save', { method: 'POST', body: formData });
+        let res;
+        if (pendingReceipt.pendingId) {
+            res = await fetch(`/api/pending/${Number(pendingReceipt.pendingId)}/save`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ receipt, items })
+            });
+        } else {
+            const formData = new FormData();
+            formData.append('receipt_image', pendingReceipt.file);
+            formData.append('details', JSON.stringify({ receipt, items }));
+            res = await fetch('/api/receipts/save', { method: 'POST', body: formData });
+        }
         const data = await readJsonResponse(res);
         if (!res.ok) return showToast(data.error || 'Could not save these items.', 'danger');
         bootstrap.Modal.getOrCreateInstance(byId('reviewModal')).hide();
+        const fromEmail = Boolean(pendingReceipt.pendingId);
         pendingReceipt = null;
-        const fileInput = byId('receiptFile');
-        if (fileInput) fileInput.value = '';
-        showSelectedReceipt(null);
+        if (fromEmail) {
+            loadPendingImports();
+        } else {
+            const fileInput = byId('receiptFile');
+            if (fileInput) fileInput.value = '';
+            showSelectedReceipt(null);
+        }
         setText('uploadResultText', data.message);
         byId('uploadResult')?.classList.remove('d-none');
     } catch (e) {
@@ -523,6 +542,105 @@ async function saveReviewedReceipt(event) {
         btn.disabled = false;
         byId('reviewSaveLoader').classList.add('d-none');
     }
+}
+
+// ---- Purchases from forwarded emails ----
+let pendingImports = [];
+
+async function loadPendingImports() {
+    const card = byId('pendingImportsCard');
+    if (!card) return;
+    try {
+        const res = await fetch('/api/pending');
+        pendingImports = (await res.json()).pending || [];
+    } catch (e) {
+        pendingImports = [];
+    }
+    card.classList.toggle('d-none', !pendingImports.length);
+    byId('pendingImportsList').innerHTML = pendingImports.map(p => {
+        const names = (p.items || []).map(i => i.item_name).filter(Boolean);
+        const what = names.length ? escapeHtml(names.slice(0, 2).join(', ') + (names.length > 2 ? ` and ${names.length - 2} more` : '')) : 'Purchase';
+        const store = p.receipt && p.receipt.store_name ? ` · ${escapeHtml(p.receipt.store_name)}` : '';
+        return `
+        <div class="pending-import">
+            <div class="min-w-0">
+                <div class="fw-semibold text-truncate">${what}</div>
+                <div class="small text-muted text-truncate">${escapeHtml(p.subject || 'Order email')}${store}</div>
+                ${p.note ? '<div class="small text-warning-emphasis"><i class="bi bi-exclamation-triangle me-1"></i>Needs details</div>' : ''}
+            </div>
+            <div class="d-flex gap-1 flex-shrink-0">
+                <a class="btn btn-sm btn-outline-secondary" href="/files/pending/${Number(p.id)}" target="_blank" title="View the email"><i class="bi bi-eye"></i></a>
+                <button type="button" class="btn btn-sm btn-outline-secondary" data-action="dismiss-import" data-pending-id="${Number(p.id)}" title="Dismiss"><i class="bi bi-x-lg"></i></button>
+                <button type="button" class="btn btn-sm btn-primary" data-action="review-import" data-pending-id="${Number(p.id)}">Review</button>
+            </div>
+        </div>`;
+    }).join('');
+}
+
+function reviewPendingImport(id) {
+    const p = pendingImports.find(item => item.id === id);
+    if (!p) return;
+    pendingReceipt = { pendingId: p.id, receipt: p.receipt || {}, items: p.items || [], note: p.note || '' };
+    openReceiptReview();
+}
+
+async function dismissPendingImport(id) {
+    if (!confirm("Dismiss this purchase? It won't be added to your inventory.")) return;
+    try {
+        const res = await fetch(`/api/pending/${Number(id)}`, { method: 'DELETE' });
+        const data = await readJsonResponse(res);
+        if (!res.ok) showToast(data.error || 'Could not dismiss this purchase.', 'danger');
+    } catch (e) {
+        showToast('Could not dismiss this purchase.', 'danger');
+    }
+    loadPendingImports();
+}
+
+async function loadForwardingAddress() {
+    const input = byId('forwardAddress');
+    if (!input) return;
+    try {
+        const data = await (await fetch('/api/inbound/address')).json();
+        if (!data.enabled) return;
+        input.value = data.address;
+        byId('replaceForwardAddress')?.classList.toggle('d-none', !data.can_manage);
+        byId('gmailConfirmation')?.classList.toggle('d-none', !data.gmail_confirmation);
+        setText('gmailConfirmationText', data.gmail_confirmation || '');
+    } catch (e) {
+        input.value = 'Could not load the address.';
+    }
+}
+
+function initEmailImport() {
+    if (!byId('pendingImportsCard')) return;
+    loadPendingImports();
+    loadForwardingAddress();
+    byId('copyForwardAddress')?.addEventListener('click', async () => {
+        const input = byId('forwardAddress');
+        try {
+            await navigator.clipboard.writeText(input.value);
+            showToast('Address copied.', 'success');
+        } catch (e) {
+            input.select();
+            showToast('Press Ctrl+C to copy the selected address.', 'info');
+        }
+    });
+    byId('replaceForwardAddress')?.addEventListener('click', async () => {
+        if (!confirm('Create a new forwarding address? The current one will stop working, so update any forwarding rules.')) return;
+        try {
+            const res = await fetch('/api/inbound/address', { method: 'POST' });
+            const data = await readJsonResponse(res);
+            if (!res.ok) return showToast(data.error || 'Could not replace the address.', 'danger');
+            showToast(data.message, 'success');
+            loadForwardingAddress();
+        } catch (e) {
+            showToast('Could not replace the address.', 'danger');
+        }
+    });
+    byId('dismissGmailConfirmation')?.addEventListener('click', async () => {
+        await fetch('/api/inbound/gmail-confirmation', { method: 'DELETE' }).catch(() => {});
+        byId('gmailConfirmation')?.classList.add('d-none');
+    });
 }
 
 byId('reviewForm')?.addEventListener('submit', saveReviewedReceipt);
@@ -774,6 +892,15 @@ async function loadDashboard() {
         const alerts = byId('dash-alerts');
         if (alerts) {
             const blocks = [];
+            if (data.pending_imports) {
+                const n = Number(data.pending_imports);
+                blocks.push(`
+                    <a class="attention-item d-block text-decoration-none" href="/upload-center#pendingImportsCard">
+                        <h6>${n} ${n === 1 ? 'purchase' : 'purchases'} from your email</h6>
+                        <p>Waiting for you to check and save.</p>
+                    </a>
+                `);
+            }
             const alertItems = Array.isArray(data.alerts) ? data.alerts : [];
             alertItems.forEach(alert => {
                 const expired = alert.status === 'expired';
@@ -1394,6 +1521,12 @@ document.addEventListener('click', (event) => {
         case 'clear-inventory-filters':
             clearInventoryFilters();
             break;
+        case 'review-import':
+            reviewPendingImport(Number(target.dataset.pendingId));
+            break;
+        case 'dismiss-import':
+            dismissPendingImport(Number(target.dataset.pendingId));
+            break;
         case 'open-conversation':
             openConversation(target.dataset.conversationId);
             break;
@@ -1463,6 +1596,7 @@ document.addEventListener('submit', async (event) => {
 window.onload = async () => {
     initDropZone();
     initInventoryFilters();
+    initEmailImport();
     await loadSettings();
     await Promise.all([loadDashboard(), loadInventory()]);
     await loadSettingsIntoForm();

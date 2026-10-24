@@ -16,6 +16,7 @@ from database import (
     get_appliance_file_paths,
     get_inventory_analytics,
     get_service_history,
+    list_pending_receipts,
     save_receipt_to_db,
     update_appliance,
     update_warranty_card,
@@ -128,8 +129,17 @@ def save_receipt():
         return jsonify({"error": error}), 400
     try:
         details = json.loads(request.form.get('details') or '{}')
+    except ValueError:
+        return jsonify({"error": "The receipt details could not be read. Please scan again."}), 400
+    return save_reviewed_items(details, lambda: storage.save(file.read(), _storage_key(file.filename), file.mimetype))
+
+
+def save_reviewed_items(details, store_file):
+    """Validates reviewed receipt details and saves each item. store_file() returns the receipt's stored file
+    reference; it is only called once something is actually going to be saved. Returns a Flask response."""
+    try:
         receipt, items = dict(details.get('receipt') or {}), list(details.get('items') or [])
-    except (ValueError, TypeError, AttributeError):
+    except (TypeError, AttributeError, ValueError):
         return jsonify({"error": "The receipt details could not be read. Please scan again."}), 400
     if not items:
         return jsonify({"error": "Choose at least one item to save."}), 400
@@ -156,7 +166,7 @@ def save_receipt():
         return jsonify({"error": "These items are already in your inventory.", "skipped": skipped}), 409
 
     try:
-        file_path = storage.save(file.read(), _storage_key(file.filename), file.mimetype)
+        file_path = store_file()
     except storage.StorageError:
         return jsonify({"error": "Could not store the receipt. Please try again."}), 502
     for row in rows:
@@ -174,6 +184,7 @@ def save_receipt():
 def get_inventory():
     items, total, active, alerts = get_inventory_analytics(g.workspace_id)
     return jsonify({
+        'pending_imports': len(list_pending_receipts(g.workspace_id)),
         'items': items,
         'total_spent': round(total, 2),
         'active_warranties': active,

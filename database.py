@@ -1,4 +1,5 @@
 import hashlib
+import json
 import os
 import re
 import secrets
@@ -246,6 +247,22 @@ def _schema_statements():
             created_at TEXT NOT NULL DEFAULT ({now}),
             PRIMARY KEY (workspace_id, email)
         )''',
+        # Purchases read from forwarded order emails, waiting for someone to review and save them.
+        f'''CREATE TABLE IF NOT EXISTS pending_receipts (
+            id {pk},
+            workspace_id INTEGER NOT NULL,
+            source_email_id TEXT NOT NULL UNIQUE,
+            sender TEXT,
+            subject TEXT,
+            details TEXT NOT NULL,
+            file_path TEXT,
+            created_at TEXT NOT NULL DEFAULT ({now})
+        )''',
+        # Every email already imported, so a delivery Resend retries is never imported twice.
+        f'''CREATE TABLE IF NOT EXISTS processed_emails (
+            email_id TEXT PRIMARY KEY,
+            created_at TEXT NOT NULL DEFAULT ({now})
+        )''',
         '''CREATE TABLE IF NOT EXISTS schema_meta (
             key TEXT PRIMARY KEY,
             value TEXT NOT NULL
@@ -285,7 +302,7 @@ _ADDED_COLUMNS = [
     ('workspace_invites', 'accepted_at TEXT'),
     ('workspace_invites', 'accepted_by INTEGER'),
 ]
-SCHEMA_VERSION = '3'
+SCHEMA_VERSION = '4'
 
 
 def _upgrade_old_sqlite_install():
@@ -1226,8 +1243,10 @@ def delete_workspace(workspace_id):
         marks = ', '.join('?' for _ in item_ids)
         cursor.execute(f'DELETE FROM service_history WHERE item_id IN ({marks})', item_ids)
         cursor.execute(f'DELETE FROM reminder_log WHERE item_id IN ({marks})', item_ids)
+    cursor.execute('SELECT file_path FROM pending_receipts WHERE workspace_id = ? AND file_path IS NOT NULL', (workspace_id,))
+    files += [row[0] for row in cursor.fetchall()]
     for table in ('appliances_v5', 'chat_messages', 'workspace_settings', 'workspace_invites', 'workspace_members',
-                  'email_optouts'):
+                  'email_optouts', 'pending_receipts'):
         cursor.execute(f'DELETE FROM {table} WHERE workspace_id = ?', (workspace_id,))
     cursor.execute('DELETE FROM workspaces WHERE id = ?', (workspace_id,))
     conn.commit()
@@ -1345,3 +1364,75 @@ def set_reminder_optout(workspace_id, email, opted_out):
     else:
         cursor.execute('DELETE FROM email_optouts WHERE workspace_id = ? AND email = ?', (workspace_id, clean_email))
     conn.commit()
+
+
+# ---------------------------------------------------------------------------
+# Purchases imported from forwarded emails
+# ---------------------------------------------------------------------------
+
+def workspace_by_inbound_token(token):
+    cursor.execute("SELECT workspace_id FROM workspace_settings WHERE key = 'inbound_token' AND value = ?", (token,))
+    row = cursor.fetchone()
+    return row[0] if row else None
+
+
+def pending_receipt_exists(source_email_id):
+    cursor.execute('SELECT 1 FROM processed_emails WHERE email_id = ?', (source_email_id,))
+    return cursor.fetchone() is not None
+
+
+def add_pending_receipt(workspace_id, source_email_id, sender, subject, details, file_path):
+    """Stores a purchase read from an email. Returns its id, or None if that email was already imported."""
+    if pending_receipt_exists(source_email_id):
+        return None
+    cursor.execute('INSERT OR IGNORE INTO processed_emails (email_id, created_at) VALUES (?, ?)',
+                   (source_email_id, datetime.now().isoformat(timespec='seconds')))
+    pending_id = insert_returning_id(
+        '''INSERT INTO pending_receipts (workspace_id, source_email_id, sender, subject, details, file_path, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?)''',
+        (workspace_id, source_email_id, sender, (subject or '')[:300], json.dumps(details), file_path,
+         datetime.now().isoformat(timespec='seconds'))
+    )
+    conn.commit()
+    return pending_id
+
+
+def list_pending_receipts(workspace_id):
+    cursor.execute(
+        '''SELECT id, sender, subject, details, created_at FROM pending_receipts
+           WHERE workspace_id = ? ORDER BY created_at DESC''',
+        (workspace_id,)
+    )
+    return [{'id': row[0], 'sender': row[1], 'subject': row[2], 'created_at': row[4], **json.loads(row[3])}
+            for row in cursor.fetchall()]
+
+
+def get_pending_receipt(workspace_id, pending_id):
+    cursor.execute(
+        'SELECT id, details, file_path FROM pending_receipts WHERE id = ? AND workspace_id = ?',
+        (pending_id, workspace_id)
+    )
+    row = cursor.fetchone()
+    return {'id': row[0], 'details': json.loads(row[1]), 'file_path': row[2]} if row else None
+
+
+def delete_pending_receipt(workspace_id, pending_id):
+    """Removes a pending purchase. Returns its stored file reference (so the caller can delete it), or False."""
+    cursor.execute('SELECT file_path FROM pending_receipts WHERE id = ? AND workspace_id = ?', (pending_id, workspace_id))
+    row = cursor.fetchone()
+    if not row:
+        return False
+    cursor.execute('DELETE FROM pending_receipts WHERE id = ? AND workspace_id = ?', (pending_id, workspace_id))
+    conn.commit()
+    return row[0]
+
+
+def prune_old_pending_receipts(days=30):
+    """Removes purchases nobody reviewed for `days` days. Returns their file references."""
+    cutoff = (datetime.now() - timedelta(days=days)).isoformat(timespec='seconds')
+    cursor.execute('SELECT file_path FROM pending_receipts WHERE created_at < ?', (cutoff,))
+    files = [row[0] for row in cursor.fetchall() if row[0]]
+    cursor.execute('DELETE FROM pending_receipts WHERE created_at < ?', (cutoff,))
+    cursor.execute('DELETE FROM processed_emails WHERE created_at < ?', (cutoff,))
+    conn.commit()
+    return files

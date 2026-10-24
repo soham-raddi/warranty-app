@@ -161,23 +161,65 @@ def _ask_vision_model(prompt, data, filename):
     return raw
 
 
+RECEIPT_RULES = (
+    "Extract the receipt details: date_of_purchase (YYYY-MM-DD), store_name (the overall retailer or "
+    "marketplace name), store_contact, invoice_number (or order number), payment_method, total_amount (the grand "
+    "total of the entire order), tax_amount, return_policy.\n"
+    "List every purchased PRODUCT in \"items\", most expensive first. Strict rule: do NOT list "
+    "supplementary charges (shipping, handling, platform fees, bags, tips, discounts) as items. For each item: "
+    "item_name, brand, model_number, serial_number, category (broad, like 'Electronic Gadgets', "
+    "'Kitchen Appliances', 'Apparel', 'Automotive'), amount (that line's total as printed, including its tax if "
+    "shown per line), warranty_info, warranty_months (the warranty length as a whole number of months, e.g. 12 "
+    "for '1 year'; null if not stated).\n"
+    "Use null for any field that is not present; never guess or write placeholders like 'not found'.\n"
+    "Return ONLY valid JSON shaped like {\"date_of_purchase\": ..., ..., \"items\": [{\"item_name\": ..., ...}]}."
+)
+RECEIPT_PROMPT = (
+    "Analyze these document pages carefully. They belong to a single invoice or receipt.\n"
+    "If the document is NOT a receipt, bill, or invoice, return: {\"error\": \"NOT_A_RECEIPT\"}\n"
+    + RECEIPT_RULES
+)
+ORDER_EMAIL_PROMPT = (
+    "Below is an email, usually an order confirmation, invoice or shipping notice from a shop, sometimes "
+    "forwarded by the buyer. Ignore forwarding headers and the buyer's own notes.\n"
+    "If it is NOT about a purchase someone made (for example a newsletter, advert or account notice), return: "
+    "{\"error\": \"NOT_A_RECEIPT\"}\n"
+    "If the email is from a marketplace, use the marketplace as store_name. If only an order date is given, use it "
+    "as date_of_purchase; if no date is given, use the date the email was sent.\n"
+    + RECEIPT_RULES
+)
+MAX_EMAIL_CHARS = 15000
+
+
+def parse_order_email(subject, sender, sent_at, text):
+    """Reads a purchase from an order email's text. Returns {"receipt", "items"} or {"error": ...}."""
+    body = (f"Subject: {subject}\nFrom: {sender}\nSent: {sent_at}\n\n{text}")[:MAX_EMAIL_CHARS]
+    try:
+        chat_completion = get_client().chat.completions.create(
+            model=CHAT_MODEL,
+            messages=[{"role": "system", "content": ORDER_EMAIL_PROMPT}, {"role": "user", "content": body}],
+            temperature=0.1,
+            response_format={"type": "json_object"},
+        )
+        raw = json.loads(chat_completion.choices[0].message.content.strip())
+    except RuntimeError as e:
+        return {"error": str(e)}
+    except Exception as e:
+        print(f"Groq order email error: {e}")
+        return {"error": "The AI service could not read this email."}
+    if not isinstance(raw, dict):
+        return {"error": "The AI returned an unexpected response."}
+    if raw.get("error"):
+        return {"error": "This email doesn't look like a purchase." if raw["error"] == "NOT_A_RECEIPT" else str(raw["error"])}
+    result = _clean_receipt_data(raw)
+    if not result["items"]:
+        return {"error": "Couldn't find a purchased item in this email."}
+    return result
+
+
 def parse_receipt_image_to_json(data, filename):
     """Reads a receipt. Returns {"receipt": shared details, "items": [products]} or {"error": ...}."""
-    prompt = (
-        "Analyze these document pages carefully. They belong to a single invoice or receipt.\n"
-        "1. If the document is NOT a receipt, bill, or invoice, return: {\"error\": \"NOT_A_RECEIPT\"}\n"
-        "2. Extract the receipt details: date_of_purchase (YYYY-MM-DD), store_name (the overall retailer or "
-        "marketplace name), store_contact, invoice_number, payment_method, total_amount (the grand total of the "
-        "entire invoice), tax_amount, return_policy.\n"
-        "3. List every purchased PRODUCT in \"items\", most expensive first. Strict rule: do NOT list "
-        "supplementary charges (shipping, handling, platform fees, bags, tips, discounts) as items. For each item: "
-        "item_name, brand, model_number, serial_number, category (broad, like 'Electronic Gadgets', "
-        "'Kitchen Appliances', 'Apparel', 'Automotive'), amount (that line's total as printed, including its tax if "
-        "shown per line), warranty_info, warranty_months (the warranty length as a whole number of months, e.g. 12 "
-        "for '1 year'; null if not stated).\n"
-        "Use null for any field that is not present on the document; never guess or write placeholders like 'not found'.\n"
-        "Return ONLY valid JSON shaped like {\"date_of_purchase\": ..., ..., \"items\": [{\"item_name\": ..., ...}]}."
-    )
+    prompt = RECEIPT_PROMPT
     raw = _ask_vision_model(prompt, data, filename)
     if raw.get("error"):
         if raw["error"] == "NOT_A_RECEIPT":

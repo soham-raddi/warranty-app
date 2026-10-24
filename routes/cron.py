@@ -11,7 +11,8 @@ from flask import Blueprint, jsonify, request
 
 import emails
 import reminders
-from database import prune_old_invites, prune_rate_limits, workspaces_with_reminders_enabled
+import storage
+from database import prune_old_invites, prune_old_pending_receipts, prune_rate_limits, workspaces_with_reminders_enabled
 
 cron_bp = Blueprint('cron', __name__)
 
@@ -29,6 +30,7 @@ def daily():
     return jsonify({
         'rate_limit_rows_removed': prune_rate_limits(),
         'old_invites_removed': prune_old_invites(),
+        'old_email_imports_removed': _prune_pending_imports(),
         'reminders': _send_due_reminders(),
     })
 
@@ -46,3 +48,10 @@ def _send_due_reminders():
             print(f'Reminder email failed for workspace {workspace_id}: {error}')
             summary['workspaces_failed'] += 1
     return summary
+
+
+def _prune_pending_imports():
+    files = prune_old_pending_receipts()
+    for ref in files:
+        storage.delete(ref)
+    return len(files)

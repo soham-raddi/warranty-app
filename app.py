@@ -17,6 +17,7 @@ from flask import Flask, g, jsonify, redirect, request, send_from_directory, ses
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 import emails
+import inbound
 from config import IS_PRODUCTION, MAX_UPLOAD_BYTES
 from database import (
     accept_pending_invites,
@@ -28,7 +29,7 @@ from database import (
     get_workspace,
     relocate_upload_paths,
 )
-from routes import auth_bp, chat_bp, cron_bp, init_oauth, pages_bp, receipts_bp, settings_bp, workspaces_bp
+from routes import auth_bp, chat_bp, cron_bp, inbound_bp, init_oauth, pages_bp, receipts_bp, settings_bp, workspaces_bp
 from routes.pages import contact_email
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -108,10 +109,11 @@ app.register_blueprint(chat_bp)
 app.register_blueprint(settings_bp)
 app.register_blueprint(workspaces_bp)
 app.register_blueprint(cron_bp)
+app.register_blueprint(inbound_bp)
 
 # Paths anyone may open without signing in.
 PUBLIC_PATHS = ('/login', '/auth', '/static', '/privacy', '/terms', '/manifest.webmanifest', '/api/cron/',
-                '/unsubscribe/')
+                '/unsubscribe/', '/api/inbound/email')
 # Paths a signed-in person may use before they belong to any workspace.
 NO_WORKSPACE_PATHS = ('/welcome', '/api/workspaces', '/api/auth/me', '/api/account')
 UNSAFE_METHODS = {'POST', 'PUT', 'PATCH', 'DELETE'}
@@ -258,6 +260,7 @@ def inject_current_user():
         'my_workspaces': get_user_workspaces(user['id']) if user else [],
         'max_upload_bytes': MAX_UPLOAD_BYTES,
         'email_enabled': emails.EMAIL_ENABLED,
+        'email_import_enabled': inbound.is_enabled(),
         'contact_email': contact_email(),
         'current_year': datetime.now().year,
         'ui': ui,

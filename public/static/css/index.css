@@ -1843,3 +1843,19 @@ body[data-reduced-motion="1"] .ai-typing span {
 .settings-pane[disabled] .recipient-picker-toggle {
     pointer-events: none;
 }
+
+/* ---- Purchases from forwarded emails ---- */
+.pending-import {
+    align-items: center;
+    background: var(--surface-2);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    display: flex;
+    gap: 0.75rem;
+    justify-content: space-between;
+    padding: 0.65rem 0.75rem;
+}
+
+.pending-import .min-w-0 {
+    min-width: 0;
+}

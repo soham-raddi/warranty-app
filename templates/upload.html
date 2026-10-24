@@ -5,7 +5,7 @@
 {% block content %}
 <section class="page-hero mb-4">
     <h1 class="page-title">Upload a receipt</h1>
-    <p class="page-subtitle">Scan a receipt, check what the AI found, then save. Receipts with several products work too.</p>
+    <p class="page-subtitle">Scan a receipt{{ " or forward an order email" if email_import_enabled }}, check what the AI found, then save. Receipts with several products work too.</p>
 </section>
 
 <section class="card section-card shadow-sm border-0 mx-auto" style="max-width: 640px;">
@@ -32,6 +32,45 @@
         </div>
     </div>
 </section>
+
+<section class="card section-card shadow-sm border-0 mx-auto mt-4 d-none" style="max-width: 640px;" id="pendingImportsCard" aria-labelledby="pendingImportsTitle">
+    <div class="card-body p-4">
+        <h2 class="h6 fw-bold mb-1" id="pendingImportsTitle"><i class="bi bi-envelope-paper me-1 text-primary"></i> From your email</h2>
+        <p class="small text-muted mb-3">Purchases read from forwarded emails. Check each one before it's added to your inventory.</p>
+        <div id="pendingImportsList" class="d-grid gap-2"></div>
+    </div>
+</section>
+
+{% if email_import_enabled %}
+<section class="card section-card shadow-sm border-0 mx-auto mt-4" style="max-width: 640px;" aria-labelledby="forwardTitle">
+    <div class="card-body p-4">
+        <h2 class="h6 fw-bold mb-1" id="forwardTitle"><i class="bi bi-forward me-1 text-primary"></i> Forward order emails</h2>
+        <p class="small text-muted mb-3">Got an order confirmation from Amazon, Flipkart or any shop? Forward it to your family's private address
+            and it shows up here to check and save. Only emails forwarded by people in this workspace are accepted.</p>
+        <div class="input-group">
+            <input id="forwardAddress" class="form-control" readonly aria-label="Forwarding address" value="Loading…">
+            <button type="button" class="btn btn-primary" id="copyForwardAddress"><i class="bi bi-clipboard me-1"></i> Copy</button>
+        </div>
+        <div id="gmailConfirmation" class="alert alert-info small mt-3 mb-0 d-none" role="status">
+            <div class="d-flex justify-content-between gap-2">
+                <strong><i class="bi bi-google me-1"></i> Gmail sent a forwarding confirmation</strong>
+                <button type="button" class="btn-close btn-sm" id="dismissGmailConfirmation" aria-label="Dismiss"></button>
+            </div>
+            <p class="mb-1 mt-1">Use the code or link below in Gmail to finish setting up automatic forwarding.</p>
+            <pre class="mb-0 small" id="gmailConfirmationText"></pre>
+        </div>
+        <details class="small mt-3">
+            <summary class="text-muted">Forward automatically from Gmail</summary>
+            <ol class="text-muted mt-2 mb-0 ps-3">
+                <li>In Gmail, open Settings &rarr; <em>Forwarding and POP/IMAP</em> &rarr; <em>Add a forwarding address</em>, and paste the address above.</li>
+                <li>Gmail sends a confirmation code, which appears on this page. Enter it in Gmail.</li>
+                <li>Create a filter (for example, emails from your favourite shops with "order" in the subject) and choose <em>Forward it to</em> this address.</li>
+            </ol>
+        </details>
+        <button type="button" class="btn btn-link btn-sm text-muted p-0 mt-2 d-none" id="replaceForwardAddress">Replace this address</button>
+    </div>
+</section>
+{% endif %}
 {% endblock %}
 
 {% block modals %}
@@ -61,6 +100,7 @@
             <input id="reviewInvoice" class="form-control form-control-sm" maxlength="100">
           </div>
           <div class="col-12 small text-muted" id="reviewTotal"></div>
+          <div class="col-12 d-none" id="reviewNote"><div class="alert alert-warning small mb-0 py-2"></div></div>
         </div>
         <div class="d-flex align-items-baseline justify-content-between mb-2">
           <h6 class="fw-semibold mb-0" id="reviewItemsTitle">Items</h6>
