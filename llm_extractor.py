@@ -1,5 +1,6 @@
 import os
 import json
+import re
 import base64
 import io
 from datetime import datetime
@@ -30,7 +31,7 @@ CHAT_MODEL = os.getenv("GROQ_CHAT_MODEL", "openai/gpt-oss-120b")
 # Details shared by everything on one receipt, and details of each purchased product.
 RECEIPT_FIELDS = [
     "date_of_purchase", "store_name", "store_contact", "invoice_number", "payment_method",
-    "total_amount", "tax_amount", "return_policy",
+    "total_amount", "tax_amount", "return_policy", "currency",
 ]
 ITEM_FIELDS = ["item_name", "brand", "model_number", "serial_number", "category", "amount", "warranty_info"]
 MAX_ITEMS = 20
@@ -106,6 +107,8 @@ def _clean_receipt_data(raw):
     """Keeps only known fields, blanks placeholder values and drops dates that are not YYYY-MM-DD."""
     receipt = {field: _clean_text(raw.get(field)) for field in RECEIPT_FIELDS}
     receipt["date_of_purchase"] = _clean_date(raw.get("date_of_purchase"))
+    currency = str(raw.get("currency") or "").strip().upper()
+    receipt["currency"] = currency if re.fullmatch(r"[A-Z]{3}", currency) else None
 
     items = []
     raw_items = raw.get("items") if isinstance(raw.get("items"), list) else [raw]
@@ -164,7 +167,9 @@ def _ask_vision_model(prompt, data, filename):
 RECEIPT_RULES = (
     "Extract the receipt details: date_of_purchase (YYYY-MM-DD), store_name (the overall retailer or "
     "marketplace name), store_contact, invoice_number (or order number), payment_method, total_amount (the grand "
-    "total of the entire order), tax_amount, return_policy.\n"
+    "total of the entire order), tax_amount, return_policy, currency (the ISO 4217 code of the amounts, e.g. INR for "
+    "the rupee sign or Rs, MYR for RM, USD, EUR, GBP, SGD; use the store's country and address to tell apart symbols "
+    "like $; null if unclear).\n"
     "List every purchased PRODUCT in \"items\", most expensive first. Strict rule: do NOT list "
     "supplementary charges (shipping, handling, platform fees, bags, tips, discounts) as items. For each item: "
     "item_name, brand, model_number, serial_number, category (broad, like 'Electronic Gadgets', "

@@ -27,19 +27,40 @@ const ACCENT_COLORS = {
     slate: ['#475569', '#334155']
 };
 
-// Display symbols only: amounts are stored in the currency printed on each receipt and are never converted.
+// Currencies a workspace or an item can use. Items keep the currency printed on their receipt; totals are
+// converted to the workspace currency by the server.
 const CURRENCY_RATES = {
-    INR: { symbol: '₹' },
-    USD: { symbol: '$' },
-    EUR: { symbol: '€' },
-    GBP: { symbol: '£' },
-    AED: { symbol: 'د.إ' },
-    CAD: { symbol: 'C$' },
-    AUD: { symbol: 'A$' },
-    SGD: { symbol: 'S$' },
-    JPY: { symbol: '¥' },
-    CNY: { symbol: '¥' }
+    INR: { symbol: '₹', name: 'Indian Rupee' },
+    USD: { symbol: '$', name: 'US Dollar' },
+    EUR: { symbol: '€', name: 'Euro' },
+    GBP: { symbol: '£', name: 'British Pound' },
+    AED: { symbol: 'د.إ', name: 'UAE Dirham' },
+    CAD: { symbol: 'C$', name: 'Canadian Dollar' },
+    AUD: { symbol: 'A$', name: 'Australian Dollar' },
+    SGD: { symbol: 'S$', name: 'Singapore Dollar' },
+    MYR: { symbol: 'RM', name: 'Malaysian Ringgit' },
+    THB: { symbol: '฿', name: 'Thai Baht' },
+    IDR: { symbol: 'Rp', name: 'Indonesian Rupiah' },
+    PHP: { symbol: '₱', name: 'Philippine Peso' },
+    HKD: { symbol: 'HK$', name: 'Hong Kong Dollar' },
+    JPY: { symbol: '¥', name: 'Japanese Yen' },
+    CNY: { symbol: '¥', name: 'Chinese Yuan' },
+    KRW: { symbol: '₩', name: 'South Korean Won' },
+    NZD: { symbol: 'NZ$', name: 'New Zealand Dollar' },
+    CHF: { symbol: 'CHF', name: 'Swiss Franc' },
+    SAR: { symbol: 'SAR', name: 'Saudi Riyal' },
+    QAR: { symbol: 'QAR', name: 'Qatari Riyal' },
+    LKR: { symbol: 'Rs', name: 'Sri Lankan Rupee' },
+    NPR: { symbol: 'Rs', name: 'Nepalese Rupee' },
+    BDT: { symbol: '৳', name: 'Bangladeshi Taka' },
+    ZAR: { symbol: 'R', name: 'South African Rand' },
 };
+
+function currencyOptions(selected, blankLabel) {
+    const blank = blankLabel ? `<option value="">${escapeHtml(blankLabel)}</option>` : '';
+    return blank + Object.entries(CURRENCY_RATES).map(([code, meta]) =>
+        `<option value="${code}" ${code === selected ? 'selected' : ''}>${code} · ${escapeHtml(meta.name)}</option>`).join('');
+}
 
 function inferCurrencyCodeFromSymbol(symbol) {
     const value = String(symbol || '').trim();
@@ -91,20 +112,41 @@ function parseAmount(value) {
     return match ? Number(match[0].replace(/,/g, '')) || 0 : 0;
 }
 
-function money(value) {
-    // Intl picks the right symbol, placement and decimals for each currency (e.g. ₹1,21,713 or ¥5,000).
-    const code = CURRENCY_RATES[appSettings.currency_code] ? appSettings.currency_code : 'INR';
-    const locale = code === 'INR' ? 'en-IN' : undefined;
+function money(value, currency) {
+    // Intl picks the right symbol, placement and decimals for each currency (e.g. ₹1,21,713, RM9 or ¥5,000).
+    const home = CURRENCY_RATES[appSettings.currency_code] ? appSettings.currency_code : 'INR';
+    const code = /^[A-Z]{3}$/.test(currency || '') ? currency : home;
+    const format = display => new Intl.NumberFormat(code === 'INR' ? 'en-IN' : undefined, {
+        style: 'currency', currency: code, currencyDisplay: display, minimumFractionDigits: 0, maximumFractionDigits: 2
+    }).format(parseAmount(value));
     try {
-        return new Intl.NumberFormat(locale, {
-            style: 'currency',
-            currency: code,
-            minimumFractionDigits: 0,
-            maximumFractionDigits: 2
-        }).format(parseAmount(value));
+        // Local symbols (RM, ฿) read best, but a bare $ or ¥ on a foreign item would be ambiguous.
+        const narrow = format('narrowSymbol');
+        const ambiguous = code !== home && /[$¥]/.test(narrow) && !['USD', 'JPY'].includes(code);
+        return ambiguous ? format('symbol') : narrow;
     } catch (e) {
-        return `${CURRENCY_RATES[code].symbol}${parseAmount(value).toLocaleString()}`;
+        return `${(CURRENCY_RATES[code] || { symbol: code + ' ' }).symbol}${parseAmount(value).toLocaleString()}`;
     }
+}
+
+function setTotal(id, data) {
+    // A total that includes converted amounts is approximate; items without an exchange rate are left out.
+    const el = byId(id);
+    if (!el) return;
+    const approx = Number(data.converted_items || 0) > 0;
+    el.innerText = approx ? `≈ ${money(Math.round(data.total_spent))}` : money(data.total_spent);
+    const notes = [];
+    if (approx) notes.push(`Includes ${data.converted_items} item(s) bought in another currency, converted at today's rate.`);
+    if (Number(data.unconverted_items || 0) > 0) notes.push(`${data.unconverted_items} item(s) in another currency aren't counted yet (no exchange rate).`);
+    el.title = notes.join(' ');
+}
+
+function itemAmount(i) {
+    // Shows what the item cost in its own currency, plus the converted amount when that differs.
+    const home = CURRENCY_RATES[appSettings.currency_code] ? appSettings.currency_code : 'INR';
+    const own = money(i.total_amount || 0, i.currency);
+    if (!i.currency || i.currency === home || i.home_amount == null) return own;
+    return `${own}<small class="text-muted d-block fw-normal">≈ ${money(Math.round(i.home_amount))}</small>`;
 }
 
 function formatPlainDate(value) {
@@ -441,7 +483,9 @@ function openReceiptReview() {
     byId('reviewStore').value = receipt.store_name || '';
     byId('reviewDate').value = receipt.date_of_purchase || '';
     byId('reviewInvoice').value = receipt.invoice_number || '';
-    setText('reviewTotal', receipt.total_amount ? `Receipt total: ${money(receipt.total_amount)}` : '');
+    setText('reviewTotal', receipt.total_amount ? `Receipt total: ${money(receipt.total_amount, receipt.currency)}` : '');
+    const currencySelect = byId('reviewCurrency');
+    if (currencySelect) currencySelect.innerHTML = currencyOptions(receipt.currency || appSettings.currency_code || 'INR');
     setText('reviewItemsTitle', items.length === 1 ? 'Item' : `${items.length} items found`);
     const note = byId('reviewNote');
     if (note) {
@@ -501,6 +545,7 @@ async function saveReviewedReceipt(event) {
     const receipt = {
         ...pendingReceipt.receipt,
         store_name: byId('reviewStore').value.trim(),
+        currency: byId('reviewCurrency')?.value || pendingReceipt.receipt.currency || '',
         date_of_purchase: byId('reviewDate').value,
         invoice_number: byId('reviewInvoice').value.trim(),
     };
@@ -705,7 +750,7 @@ async function loadInventory() {
         const res = await fetch('/api/inventory');
         const data = await res.json();
 
-        setText('s-tot', money(data.total_spent));
+        setTotal('s-tot', data);
         setText('s-act', data.active_warranties || 0);
         inventoryItems = Array.isArray(data.items) ? data.items : [];
         fillCategoryFilter();
@@ -731,7 +776,7 @@ const INVENTORY_SORTS = {
     oldest: (a, b) => (purchaseKey(a) || '9999').localeCompare(purchaseKey(b) || '9999'),
     // Still-active warranties ending soonest first, then expired ones, then unknown.
     expiry: (a, b) => expiryRank(a) - expiryRank(b),
-    amount: (a, b) => (parseAmount(b.total_amount) || 0) - (parseAmount(a.total_amount) || 0),
+    amount: (a, b) => (b.home_amount ?? -1) - (a.home_amount ?? -1),
     name: (a, b) => String(a.item_name || '').localeCompare(String(b.item_name || '')),
 };
 
@@ -805,7 +850,7 @@ function renderInventoryRow(i) {
             ${escapeHtml(formatPlainDate(i.date_of_purchase) || 'Unknown')}
             ${i.store_name ? `<small class="text-muted d-block text-truncate inventory-store">${escapeHtml(i.store_name)}</small>` : ''}
         </td>
-        <td class="text-end fw-semibold text-nowrap">${money(i.total_amount || 0)}</td>
+        <td class="text-end fw-semibold text-nowrap">${itemAmount(i)}</td>
         <td>
             <div class="d-flex flex-wrap align-items-center column-gap-2">${warrantyBadge(i.warranty_status)} ${expiry}</div>
             ${card}
@@ -865,7 +910,7 @@ async function loadDashboard() {
         const data = await res.json();
         const items = Array.isArray(data.items) ? data.items.slice() : [];
 
-        setText('dash-total', money(data.total_spent));
+        setTotal('dash-total', data);
         setText('dash-active', data.active_warranties || 0);
         setText('dash-count', items.length);
 
@@ -882,7 +927,7 @@ async function loadDashboard() {
                     <tr>
                         <td class="ps-4"><strong>${escapeHtml(i.item_name || 'Unknown')}</strong><br><small class="text-muted">${escapeHtml(i.brand || 'N/A')}</small></td>
                         <td class="text-nowrap">${escapeHtml(formatPlainDate(i.date_of_purchase) || 'Unknown')}</td>
-                        <td class="text-nowrap">${money(i.total_amount || 0)}</td>
+                        <td class="text-nowrap">${itemAmount(i)}</td>
                         <td class="pe-4">${warrantyBadge(i.warranty_status)}</td>
                     </tr>
                 `).join('');
@@ -1617,6 +1662,8 @@ async function openEditItem(itemId) {
         if (!res.ok) throw new Error(data.error || 'Could not load this item.');
         editingItemId = Number(itemId);
         const form = byId('editItemForm');
+        const currencySelect = byId('editCurrency');
+        if (currencySelect) currencySelect.innerHTML = currencyOptions('', `Same as workspace (${appSettings.currency_code || 'INR'})`);
         [...form.elements].forEach(field => {
             if (field.name) field.value = data.item[field.name] ?? '';
         });

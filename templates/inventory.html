@@ -97,8 +97,11 @@
                         <div class="form-text">Leave empty to use the workspace default.</div>
                     </div>
                     <div class="col-md-4">
-                        <label class="form-label fw-semibold" for="editTotal">Total amount</label>
-                        <input id="editTotal" name="total_amount" class="form-control" inputmode="decimal" maxlength="40">
+                        <label class="form-label fw-semibold" for="editTotal">Amount</label>
+                        <div class="input-group">
+                            <input id="editTotal" name="total_amount" class="form-control" inputmode="decimal" maxlength="40">
+                            <select id="editCurrency" name="currency" class="form-select edit-currency" aria-label="Currency"></select>
+                        </div>
                     </div>
                     <div class="col-md-6">
                         <label class="form-label fw-semibold" for="editCategory">Category</label>

@@ -109,6 +109,8 @@ def insert_returning_id(sql, params=()):
 CURRENCY_SYMBOLS = {
     'INR': '₹', 'USD': '$', 'EUR': '€', 'GBP': '£', 'AED': 'د.إ',
     'CAD': 'CA$', 'AUD': 'A$', 'SGD': 'S$', 'JPY': '¥', 'CNY': 'CN¥',
+    'MYR': 'RM', 'THB': '฿', 'IDR': 'Rp', 'PHP': '₱', 'HKD': 'HK$', 'NZD': 'NZ$', 'CHF': 'CHF',
+    'SAR': 'SAR', 'QAR': 'QAR', 'KRW': '₩', 'LKR': 'Rs', 'NPR': 'Rs', 'BDT': '৳', 'ZAR': 'R',
 }
 
 DEFAULT_SETTINGS = {
@@ -155,7 +157,8 @@ def _schema_statements():
             has_warranty_card INTEGER DEFAULT 0,
             warranty_card_path TEXT,
             workspace_id INTEGER,
-            warranty_months INTEGER
+            warranty_months INTEGER,
+            currency TEXT
         )''',
         f'''CREATE TABLE IF NOT EXISTS chat_messages (
             id {pk},
@@ -301,8 +304,9 @@ _ADDED_COLUMNS = [
     ('workspace_invites', 'expires_at TEXT'),
     ('workspace_invites', 'accepted_at TEXT'),
     ('workspace_invites', 'accepted_by INTEGER'),
+    ('appliances_v5', 'currency TEXT'),
 ]
-SCHEMA_VERSION = '4'
+SCHEMA_VERSION = '5'
 
 
 def _upgrade_old_sqlite_install():
@@ -737,15 +741,15 @@ def save_receipt_to_db(workspace_id, data):
             item_name, brand, model_number, serial_number, category, date_of_purchase,
             price, tax_amount, total_amount, payment_method,
             store_name, store_contact, warranty_info, return_policy, invoice_number, file_path,
-            has_warranty_card, warranty_card_path, workspace_id, warranty_months
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            has_warranty_card, warranty_card_path, workspace_id, warranty_months, currency
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ''', (
         data.get("item_name"), data.get("brand"), data.get("model_number"), data.get("serial_number"),
         data.get("category"), data.get("date_of_purchase"), data.get("price"),
         data.get("tax_amount"), data.get("total_amount"), data.get("payment_method"),
         data.get("store_name"), data.get("store_contact"), data.get("warranty_info"),
         data.get("return_policy"), data.get("invoice_number"), data.get("file_path"),
-        has_warranty_card, data.get("warranty_card_path"), workspace_id, data.get("warranty_months")
+        has_warranty_card, data.get("warranty_card_path"), workspace_id, data.get("warranty_months"), data.get("currency")
     ))
     conn.commit()
     return True
@@ -774,7 +778,7 @@ def get_appliance(workspace_id, item_id):
 
 _UPDATABLE_COLUMNS = {
     'item_name', 'brand', 'model_number', 'serial_number', 'category', 'date_of_purchase', 'total_amount',
-    'store_name', 'store_contact', 'invoice_number', 'warranty_info', 'return_policy', 'warranty_months',
+    'store_name', 'store_contact', 'invoice_number', 'warranty_info', 'return_policy', 'warranty_months', 'currency',
 }
 
 
@@ -909,6 +913,8 @@ def get_inventory_analytics(workspace_id):
     items = [dict(zip(columns, row)) for row in rows]
     total_spent = 0.0
     active_warranties = 0
+    home_currency = get_setting_value(workspace_id, 'currency_code', 'INR')
+    rates = get_exchange_rates()
 
     try:
         warranty_period_days = max(1, int(get_setting_value(workspace_id, 'warranty_period_days', '365')))
@@ -924,8 +930,12 @@ def get_inventory_analytics(workspace_id):
 
     for item in items:
         amount = parse_amount(item.get('total_amount'))
-        if amount is not None:
-            total_spent += amount
+        currency = (item.get('currency') or home_currency).upper()
+        item['currency'] = currency
+        # What the item cost in the workspace's currency; None when no exchange rate is known yet.
+        item['home_amount'] = convert_amount(amount, currency, home_currency, rates) if amount is not None else None
+        if item['home_amount'] is not None:
+            total_spent += item['home_amount']
 
         try:
             p_date = datetime.strptime(item['date_of_purchase'], '%Y-%m-%d')
@@ -1436,3 +1446,50 @@ def prune_old_pending_receipts(days=30):
     cursor.execute('DELETE FROM processed_emails WHERE created_at < ?', (cutoff,))
     conn.commit()
     return files
+
+
+# ---------------------------------------------------------------------------
+# Exchange rates (refreshed daily by fx.py; stored so pages never wait on the rate service)
+# ---------------------------------------------------------------------------
+
+def get_exchange_rates():
+    """{currency code: units per 1 EUR}, or {} if never fetched."""
+    cursor.execute("SELECT value FROM app_settings WHERE key = 'exchange_rates'")
+    row = cursor.fetchone()
+    try:
+        return json.loads(row[0])['rates'] if row else {}
+    except (ValueError, KeyError, TypeError):
+        return {}
+
+
+def exchange_rates_date():
+    cursor.execute("SELECT value FROM app_settings WHERE key = 'exchange_rates'")
+    row = cursor.fetchone()
+    try:
+        return json.loads(row[0]).get('date') if row else None
+    except (ValueError, TypeError):
+        return None
+
+
+def save_exchange_rates(rates, date):
+    cursor.execute(
+        '''INSERT INTO app_settings (key, value) VALUES ('exchange_rates', ?)
+           ON CONFLICT (key) DO UPDATE SET value = excluded.value''',
+        (json.dumps({'rates': rates, 'date': date}),)
+    )
+    conn.commit()
+
+
+def convert_amount(amount, from_currency, to_currency, rates):
+    if from_currency == to_currency:
+        return amount
+    from_rate, to_rate = rates.get(from_currency), rates.get(to_currency)
+    if not from_rate or not to_rate:
+        return None
+    return round(amount / from_rate * to_rate, 2)
+
+
+def foreign_currencies_in_use():
+    """Currencies on saved items, so the daily job knows whether rates are needed at all."""
+    cursor.execute("SELECT DISTINCT currency FROM appliances_v5 WHERE currency IS NOT NULL AND currency != ''")
+    return {row[0] for row in cursor.fetchall()}

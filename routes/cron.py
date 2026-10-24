@@ -10,6 +10,7 @@ import os
 from flask import Blueprint, jsonify, request
 
 import emails
+import fx
 import reminders
 import storage
 from database import prune_old_invites, prune_old_pending_receipts, prune_rate_limits, workspaces_with_reminders_enabled
@@ -31,6 +32,7 @@ def daily():
         'rate_limit_rows_removed': prune_rate_limits(),
         'old_invites_removed': prune_old_invites(),
         'old_email_imports_removed': _prune_pending_imports(),
+        'exchange_rates_refreshed': fx.refresh_if_needed(),
         'reminders': _send_due_reminders(),
     })
 

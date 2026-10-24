@@ -1859,3 +1859,8 @@ body[data-reduced-motion="1"] .ai-typing span {
 .pending-import .min-w-0 {
     min-width: 0;
 }
+
+.edit-currency {
+    flex: 0 0 auto;
+    max-width: 7.5rem;
+}

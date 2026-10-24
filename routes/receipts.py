@@ -1,4 +1,5 @@
 import json
+import re
 import uuid
 from datetime import datetime
 
@@ -11,16 +12,19 @@ from database import (
     apply_warranty_card_details,
     delete_appliance,
     find_duplicate_receipt,
+    get_all_settings,
     get_appliance,
     item_exists,
     get_appliance_file_paths,
     get_inventory_analytics,
     get_service_history,
     list_pending_receipts,
+    parse_amount,
     save_receipt_to_db,
     update_appliance,
     update_warranty_card,
 )
+import fx
 from llm_extractor import parse_receipt_image_to_json, parse_warranty_card
 from ratelimit import limit
 from .auth import role_required
@@ -33,7 +37,7 @@ ALLOWED_EXTENSIONS = {'jpg', 'jpeg', 'png', 'webp', 'pdf'}
 EDITABLE_FIELDS = {
     'item_name': 200, 'brand': 100, 'model_number': 100, 'serial_number': 100, 'category': 100,
     'date_of_purchase': 10, 'total_amount': 40, 'store_name': 200, 'store_contact': 200,
-    'invoice_number': 100, 'warranty_info': 500, 'return_policy': 500,
+    'invoice_number': 100, 'warranty_info': 500, 'return_policy': 500, 'currency': 3,
 }
 SAVE_FIELDS = {**EDITABLE_FIELDS, 'payment_method': 60, 'tax_amount': 40}
 MAX_ITEMS_PER_RECEIPT = 20
@@ -74,6 +78,12 @@ def _clean_fields(payload, allowed):
 
     if 'item_name' in changes and not changes['item_name']:
         return None, 'Item name cannot be empty'
+    if changes.get('currency'):
+        # Checked on the submitted text, before it is cut to the field's length.
+        raw_currency = str(payload.get('currency') or '').strip().upper()
+        if not re.fullmatch(r'[A-Z]{3}', raw_currency):
+            return None, 'Currency must be a 3-letter code such as INR or MYR'
+        changes['currency'] = raw_currency
     if changes.get('date_of_purchase'):
         try:
             datetime.strptime(changes['date_of_purchase'], '%Y-%m-%d')
@@ -93,6 +103,14 @@ def _clean_fields(payload, allowed):
                 return None, 'Warranty length must be between 1 and 360 months'
             changes['warranty_months'] = months
     return changes, None
+
+
+def _ensure_rates(currencies):
+    """Fetches exchange rates right away the first time an item is saved in a currency without one."""
+    home = get_all_settings(g.workspace_id).get('currency_code')
+    foreign = {c for c in currencies if c and c != home}
+    if foreign:
+        fx.ensure_rates_for(home, *foreign)
 
 
 def _duplicate_of(receipt, item):
@@ -172,6 +190,7 @@ def save_reviewed_items(details, store_file):
     for row in rows:
         row['file_path'] = file_path
         save_receipt_to_db(g.workspace_id, row)
+    _ensure_rates({row.get('currency') for row in rows})
 
     saved = len(rows)
     message = f"Saved {saved} item{'s' if saved != 1 else ''} to your inventory."
@@ -183,8 +202,13 @@ def save_reviewed_items(details, store_file):
 @receipts_bp.route('/api/inventory', methods=['GET'])
 def get_inventory():
     items, total, active, alerts = get_inventory_analytics(g.workspace_id)
+    home = get_all_settings(g.workspace_id).get('currency_code')
+    foreign = [i for i in items if i['currency'] != home and parse_amount(i.get('total_amount')) is not None]
     return jsonify({
         'pending_imports': len(list_pending_receipts(g.workspace_id)),
+        # Items in other currencies are converted for the total; ones without a known rate are left out.
+        'converted_items': sum(1 for i in foreign if i['home_amount'] is not None),
+        'unconverted_items': sum(1 for i in foreign if i['home_amount'] is None),
         'items': items,
         'total_spent': round(total, 2),
         'active_warranties': active,
@@ -212,6 +236,7 @@ def edit_item(item_id):
         return jsonify({'error': error}), 400
 
     update_appliance(g.workspace_id, item_id, changes)
+    _ensure_rates({changes.get('currency')})
     return jsonify({'message': 'Item updated.', 'item': get_appliance(g.workspace_id, item_id)})
 
 
