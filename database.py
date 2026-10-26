@@ -275,6 +275,11 @@ def _schema_statements():
             value TEXT NOT NULL,
             PRIMARY KEY (user_id, key)
         )''',
+        # Each day's exchange rates (units per 1 EUR), fetched once, so items convert at their purchase-date rate.
+        '''CREATE TABLE IF NOT EXISTS historical_rates (
+            rate_date TEXT PRIMARY KEY,
+            rates TEXT NOT NULL
+        )''',
         '''CREATE TABLE IF NOT EXISTS schema_meta (
             key TEXT PRIMARY KEY,
             value TEXT NOT NULL
@@ -316,7 +321,7 @@ _ADDED_COLUMNS = [
     ('appliances_v5', 'currency TEXT'),
     ('service_history', 'currency TEXT'),
 ]
-SCHEMA_VERSION = '8'
+SCHEMA_VERSION = '9'
 
 
 def _upgrade_old_sqlite_install():
@@ -961,6 +966,8 @@ def get_inventory_analytics(workspace_id):
     home_currency = get_setting_value(workspace_id, 'currency_code', 'INR')
     rates = get_exchange_rates()
     today = workspace_today(workspace_id)
+    day_rates = get_historical_rates({i.get('date_of_purchase') for i in items
+                                      if (i.get('currency') or home_currency).upper() != home_currency})
 
     try:
         warranty_period_days = max(1, int(get_setting_value(workspace_id, 'warranty_period_days', '365')))
@@ -978,8 +985,16 @@ def get_inventory_analytics(workspace_id):
         amount = parse_amount(item.get('total_amount'))
         currency = (item.get('currency') or home_currency).upper()
         item['currency'] = currency
-        # What the item cost in the workspace's currency; None when no exchange rate is known yet.
-        item['home_amount'] = convert_amount(amount, currency, home_currency, rates) if amount is not None else None
+        # What the item cost in the workspace's currency: at the rate on the purchase date when known, otherwise
+        # today's; None when no rate is known yet.
+        item['home_amount'], item['rate_date'] = None, None
+        if amount is not None:
+            on_the_day = day_rates.get(item.get('date_of_purchase'))
+            converted = convert_amount(amount, currency, home_currency, on_the_day) if on_the_day else None
+            if converted is not None and currency != home_currency:
+                item['home_amount'], item['rate_date'] = converted, item['date_of_purchase']
+            else:
+                item['home_amount'] = convert_amount(amount, currency, home_currency, rates)
         if item['home_amount'] is not None:
             total_spent += item['home_amount']
 
@@ -1619,3 +1634,42 @@ def set_appearance(user_id, changes):
             (user_id, key, value)
         )
     conn.commit()
+
+
+def get_historical_rates(dates):
+    """{date: {currency: units per 1 EUR}} for the dates already fetched."""
+    wanted = sorted(d for d in dates if d and re.fullmatch(r'\d{4}-\d{2}-\d{2}', str(d)))
+    if not wanted:
+        return {}
+    cursor.execute(f"SELECT rate_date, rates FROM historical_rates WHERE rate_date IN ({', '.join('?' for _ in wanted)})",
+                   wanted)
+    result = {}
+    for rate_date, rates in cursor.fetchall():
+        try:
+            result[rate_date] = json.loads(rates)
+        except ValueError:
+            continue
+    return result
+
+
+def save_historical_rates(rate_date, rates):
+    cursor.execute(
+        '''INSERT INTO historical_rates (rate_date, rates) VALUES (?, ?)
+           ON CONFLICT (rate_date) DO UPDATE SET rates = excluded.rates''',
+        (rate_date, json.dumps(rates))
+    )
+    conn.commit()
+
+
+def purchase_dates_missing_rates(limit=50):
+    """Purchase dates of items bought in another currency than their family's, whose rates aren't stored yet."""
+    cursor.execute('''
+        SELECT DISTINCT a.date_of_purchase FROM appliances_v5 a
+        LEFT JOIN workspace_settings s ON s.workspace_id = a.workspace_id AND s.key = 'currency_code'
+        WHERE a.currency IS NOT NULL AND a.currency != '' AND a.date_of_purchase IS NOT NULL
+          AND a.currency != COALESCE(s.value, 'INR')
+          AND a.date_of_purchase NOT IN (SELECT rate_date FROM historical_rates)
+        ORDER BY a.date_of_purchase DESC
+        LIMIT ?
+    ''', (limit,))
+    return [row[0] for row in cursor.fetchall() if re.fullmatch(r'\d{4}-\d{2}-\d{2}', str(row[0] or ''))]

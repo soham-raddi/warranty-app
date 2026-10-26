@@ -12,6 +12,7 @@ from database import (
     get_workspace,
     opted_out_emails,
     pin_item_currencies,
+    purchase_dates_missing_rates,
     set_reminder_optout,
     set_setting_value,
 )
@@ -117,6 +118,8 @@ def update_settings():
         pin_item_currencies(g.workspace_id, previous_currency)
         fx.ensure_rates_for(previous_currency, currency_code)
     set_setting_value(g.workspace_id, 'currency_code', currency_code)
+    if currency_code != previous_currency:
+        fx.ensure_day_rates(*purchase_dates_missing_rates(fx.MAX_DAYS_PER_RUN))
     set_setting_value(g.workspace_id, 'currency_symbol', currency_symbol)
     set_setting_value(g.workspace_id, 'warranty_period_days', warranty_period_days)
     set_setting_value(g.workspace_id, 'date_format', date_format)

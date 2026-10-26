@@ -130,12 +130,14 @@ def _date_error(value, label, allow_future=True):
     return None
 
 
-def _ensure_rates(currencies):
-    """Fetches exchange rates right away the first time an item is saved in a currency without one."""
+def _ensure_rates(items):
+    """Fetches what's needed to convert items bought in another currency: today's rates the first time a currency
+    appears, and the rates on each purchase date."""
     home = get_all_settings(g.workspace_id).get('currency_code')
-    foreign = {c for c in currencies if c and c != home}
+    foreign = [i for i in items if i.get('currency') and i['currency'] != home]
     if foreign:
-        fx.ensure_rates_for(home, *foreign)
+        fx.ensure_rates_for(home, *{i['currency'] for i in foreign})
+        fx.ensure_day_rates(*{i.get('date_of_purchase') for i in foreign})
 
 
 def _duplicate_of(receipt, item):
@@ -216,7 +218,7 @@ def save_reviewed_items(details, store_file):
     for row in rows:
         row['file_path'] = file_path
         save_receipt_to_db(g.workspace_id, row)
-    _ensure_rates({row.get('currency') for row in rows})
+    _ensure_rates(rows)
 
     saved = len(rows)
     message = f"Saved {saved} item{'s' if saved != 1 else ''} to your inventory."
@@ -234,6 +236,7 @@ def get_inventory():
         'pending_imports': len(list_pending_receipts(g.workspace_id)),
         # Items in other currencies are converted for the total; ones without a known rate are left out.
         'converted_items': sum(1 for i in foreign if i['home_amount'] is not None),
+        'converted_at_purchase_date': sum(1 for i in foreign if i.get('rate_date')),
         'unconverted_items': sum(1 for i in foreign if i['home_amount'] is None),
         'items': items,
         'total_spent': round(total, 2),
@@ -262,7 +265,8 @@ def edit_item(item_id):
         return jsonify({'error': error}), 400
 
     update_appliance(g.workspace_id, item_id, changes)
-    _ensure_rates({changes.get('currency')})
+    if {'currency', 'date_of_purchase'} & set(changes):
+        _ensure_rates([get_appliance(g.workspace_id, item_id) or {}])
     return jsonify({'message': 'Item updated.', 'item': get_appliance(g.workspace_id, item_id)})
 
 

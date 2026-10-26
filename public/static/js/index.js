@@ -155,7 +155,14 @@ function setTotal(id, data) {
     const approx = Number(data.converted_items || 0) > 0;
     el.innerText = approx ? `≈ ${money(Math.round(data.total_spent))}` : money(data.total_spent);
     const notes = [];
-    if (approx) notes.push(`Includes ${data.converted_items} item(s) bought in another currency, converted at today's rate.`);
+    if (approx) {
+        const onTheDay = Number(data.converted_at_purchase_date || 0);
+        const today = Number(data.converted_items) - onTheDay;
+        const parts = [];
+        if (onTheDay) parts.push(`${onTheDay} at the rate on their purchase date`);
+        if (today) parts.push(`${today} at today's rate`);
+        notes.push(`Includes ${data.converted_items} item(s) bought in another currency, converted ${parts.join(' and ')}.`);
+    }
     if (Number(data.unconverted_items || 0) > 0) notes.push(`${data.unconverted_items} item(s) in another currency aren't counted yet (no exchange rate).`);
     el.title = notes.join(' ');
 }
@@ -165,7 +172,8 @@ function itemAmount(i) {
     const home = CURRENCY_RATES[appSettings.currency_code] ? appSettings.currency_code : 'INR';
     const own = money(i.total_amount || 0, i.currency);
     if (!i.currency || i.currency === home || i.home_amount == null) return own;
-    return `${own}<small class="text-muted d-block fw-normal">≈ ${money(Math.round(i.home_amount))}</small>`;
+    const when = i.rate_date ? `the rate on ${formatPlainDate(i.rate_date)}` : "today's rate (no purchase date)";
+    return `${own}<small class="text-muted d-block fw-normal" title="Converted at ${escapeHtml(when)}">≈ ${money(Math.round(i.home_amount))}</small>`;
 }
 
 function formatPlainDate(value) {
