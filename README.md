@@ -117,9 +117,7 @@ and the `uploads/` folder.
 3. **Google Cloud:** add `https://<your-app>.vercel.app/auth/callback` as an authorized redirect URI, then publish
    the OAuth consent screen with `https://<your-app>.vercel.app/` as the homepage and
    `https://<your-app>.vercel.app/privacy` as the privacy policy.
-4. **Existing data (optional):** with the Supabase values in your local `.env`, run
-   `python scripts/migrate_to_supabase.py` (dry run) and then `python scripts/migrate_to_supabase.py --apply`.
-5. Deploy. `vercel.json` sets a 60-second function timeout and a daily job at 03:00 UTC that cleans up and sends
+4. Deploy. `vercel.json` sets a 60-second function timeout and a daily job at 03:00 UTC that cleans up and sends
    warranty reminder emails.
 
 On Vercel the app automatically: requires `SECRET_KEY`, uses secure cookies and HTTPS URLs, disables dev login,
