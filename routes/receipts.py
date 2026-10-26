@@ -78,6 +78,8 @@ def _clean_fields(payload, allowed):
 
     if 'item_name' in changes and not changes['item_name']:
         return None, 'Item name cannot be empty'
+    if 'currency' in changes and not changes['currency']:
+        changes.pop('currency')  # an item always has a currency; leaving it blank keeps the current one
     if changes.get('currency'):
         # Checked on the submitted text, before it is cut to the field's length.
         raw_currency = str(payload.get('currency') or '').strip().upper()
@@ -178,6 +180,7 @@ def save_reviewed_items(details, store_file):
             skipped.append(row['item_name'])
             continue
         row['price'] = row['total_amount']
+        row['currency'] = row.get('currency') or get_all_settings(g.workspace_id).get('currency_code')
         rows.append(row)
 
     if not rows:

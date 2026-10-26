@@ -306,7 +306,7 @@ _ADDED_COLUMNS = [
     ('workspace_invites', 'accepted_by INTEGER'),
     ('appliances_v5', 'currency TEXT'),
 ]
-SCHEMA_VERSION = '5'
+SCHEMA_VERSION = '6'
 
 
 def _upgrade_old_sqlite_install():
@@ -365,11 +365,34 @@ def init_schema():
         _upgrade_old_sqlite_install()
     for statement in _INDEXES:
         cursor.execute(statement)
+    _give_items_a_currency()
     cursor.execute(
         '''INSERT INTO schema_meta (key, value) VALUES ('version', ?)
            ON CONFLICT (key) DO UPDATE SET value = excluded.value''',
         (SCHEMA_VERSION,)
     )
+    conn.commit()
+
+
+def _give_items_a_currency(workspace_id=None, currency=None):
+    """Items saved before currencies were tracked get the workspace currency they were entered in, so changing the
+    workspace currency later converts them instead of relabelling them."""
+    if workspace_id is not None:
+        cursor.execute(
+            "UPDATE appliances_v5 SET currency = ? WHERE workspace_id = ? AND (currency IS NULL OR currency = '')",
+            (currency, workspace_id)
+        )
+        return
+    cursor.execute('''
+        UPDATE appliances_v5 SET currency = COALESCE(
+            (SELECT value FROM workspace_settings s WHERE s.workspace_id = appliances_v5.workspace_id AND s.key = 'currency_code'),
+            'INR')
+        WHERE currency IS NULL OR currency = ''
+    ''')
+
+
+def pin_item_currencies(workspace_id, currency):
+    _give_items_a_currency(workspace_id, currency)
     conn.commit()
 
 

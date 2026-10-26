@@ -1147,7 +1147,23 @@ class ZZZZCurrencyTests(unittest.TestCase):
         self.assertEqual(owner.patch(f'/api/inventory/{item_id}', json={'currency': 'myr'}).status_code, 200)
         self.assertEqual(owner.get('/api/inventory').json['items'][0]['currency'], 'MYR')
         owner.patch(f'/api/inventory/{item_id}', json={'currency': ''})
-        self.assertEqual(owner.get('/api/inventory').json['items'][0]['currency'], 'INR', 'cleared = workspace currency')
+        self.assertEqual(owner.get('/api/inventory').json['items'][0]['currency'], 'MYR', 'blank keeps the currency')
+
+    def test_changing_the_workspace_currency_converts_instead_of_relabelling(self):
+        owner = new_family('switcher@example.com', 'Switcher Family')  # INR
+        save(owner, {'receipt': {'invoice_number': 'SW-1'}, 'items': [{'item_name': 'Phone', 'amount': '33999'}]})
+        # An item from before currencies were tracked has none stored.
+        workspace_id = owner.get('/api/auth/me').json['workspace']['id']
+        database.cursor.execute("UPDATE appliances_v5 SET currency = NULL WHERE workspace_id = ?", (workspace_id,))
+        database.conn.commit()
+        database.save_exchange_rates({'EUR': 1.0, 'INR': 100.0, 'USD': 1.25}, '2026-10-25')
+
+        settings = owner.get('/api/settings').json['settings']
+        settings['currency_code'] = 'USD'
+        self.assertEqual(owner.put('/api/settings', json=settings).status_code, 200)
+        data = owner.get('/api/inventory').json
+        self.assertEqual(data['items'][0]['currency'], 'INR', 'the phone was bought in rupees')
+        self.assertEqual(data['total_spent'], 424.99, 'Rs 33,999 is about $425, not $33,999')
 
     def test_receipt_currency_is_read(self):
         import llm_extractor

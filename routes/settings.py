@@ -1,12 +1,14 @@
 from flask import Blueprint, g, jsonify, render_template, request
 
 import emails
+import fx
 import reminders
 from database import (
     CURRENCY_SYMBOLS,
     get_all_settings,
     get_workspace,
     opted_out_emails,
+    pin_item_currencies,
     set_reminder_optout,
     set_setting_value,
 )
@@ -95,6 +97,11 @@ def update_settings():
         return jsonify({'error': 'warranty_period_days must be between 1 and 3650'}), 400
 
     set_setting_value(g.workspace_id, 'timezone', timezone)
+    previous_currency = get_all_settings(g.workspace_id).get('currency_code')
+    if currency_code != previous_currency:
+        # Items keep the currency they were bought in; totals are converted to the new one.
+        pin_item_currencies(g.workspace_id, previous_currency)
+        fx.ensure_rates_for(previous_currency, currency_code)
     set_setting_value(g.workspace_id, 'currency_code', currency_code)
     set_setting_value(g.workspace_id, 'currency_symbol', currency_symbol)
     set_setting_value(g.workspace_id, 'warranty_period_days', warranty_period_days)

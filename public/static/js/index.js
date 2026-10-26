@@ -1663,7 +1663,7 @@ async function openEditItem(itemId) {
         editingItemId = Number(itemId);
         const form = byId('editItemForm');
         const currencySelect = byId('editCurrency');
-        if (currencySelect) currencySelect.innerHTML = currencyOptions('', `Same as workspace (${appSettings.currency_code || 'INR'})`);
+        if (currencySelect) currencySelect.innerHTML = currencyOptions(data.item.currency || appSettings.currency_code || 'INR');
         [...form.elements].forEach(field => {
             if (field.name) field.value = data.item[field.name] ?? '';
         });
