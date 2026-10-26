@@ -4,7 +4,7 @@ from flask import Blueprint, g, jsonify, request
 
 from chatbot import ask_digital_twin
 from ratelimit import limit
-from database import clear_chat_messages, get_chat_conversations, get_chat_messages, save_chat_message, search_chat_messages
+from database import clear_chat_messages, delete_chat_conversation, get_chat_conversations, get_chat_messages, save_chat_message, search_chat_messages
 
 chat_bp = Blueprint('chat', __name__)
 
@@ -21,7 +21,7 @@ def chat():
     conversation_id = data.get('conversation_id', 'legacy')
 
     if not user_message:
-        return jsonify({'error': 'message is required'}), 400
+        return jsonify({'error': 'Type a message first.'}), 400
     if len(user_message) > 2000:
         return jsonify({'error': 'Messages can be at most 2,000 characters.'}), 400
     if not CONVERSATION_ID_PATTERN.match(str(conversation_id)):
@@ -78,6 +78,15 @@ def chat_conversation_messages(conversation_id):
     limit = request.args.get('limit', default=100, type=int)
     messages = get_chat_messages(g.workspace_id, g.current_user['id'], conversation_id=conversation_id, limit=limit)
     return jsonify({'messages': messages, 'conversation_id': conversation_id})
+
+
+@chat_bp.route('/api/chat/conversations/<conversation_id>', methods=['DELETE'])
+def delete_conversation(conversation_id):
+    if not CONVERSATION_ID_PATTERN.match(conversation_id):
+        return jsonify({'error': 'That conversation could not be found.'}), 404
+    if not delete_chat_conversation(g.workspace_id, g.current_user['id'], conversation_id):
+        return jsonify({'error': 'That conversation could not be found.'}), 404
+    return jsonify({'message': 'Chat deleted.'})
 
 
 @chat_bp.route('/api/chat/history', methods=['DELETE'])

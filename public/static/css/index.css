@@ -1864,3 +1864,187 @@ body[data-reduced-motion="1"] .ai-typing span {
     flex: 0 0 auto;
     max-width: 7.5rem;
 }
+
+/* ---- Header icons (shown on phones) ---- */
+.app-nav-link > .bi {
+    display: none;
+}
+
+/* The banner's subtitle stays light on its dark gradient in both themes. */
+body[data-theme="dark"] .dashboard-hero .page-subtitle,
+.dashboard-hero .page-subtitle {
+    color: rgba(255, 255, 255, 0.9) !important;
+    max-width: 640px;
+}
+
+.hero-glow {
+    opacity: 0.55;
+}
+
+/* ---- Phones ---- */
+@media (max-width: 575.98px) {
+    /* Brand and account on one row, all five sections as a full-width row of icons below. */
+    .app-header-inner {
+        align-items: center;
+        display: grid;
+        gap: 0.6rem;
+        grid-template-areas: "brand account" "nav nav";
+        grid-template-columns: 1fr auto;
+    }
+
+    .app-header-inner > .brand-link {
+        grid-area: brand;
+    }
+
+    .app-header-inner > .d-flex {
+        display: contents !important;
+    }
+
+    .app-header-inner .dropdown {
+        grid-area: account;
+    }
+
+    .app-nav {
+        display: grid;
+        gap: 0.25rem;
+        grid-area: nav;
+        grid-template-columns: repeat(5, minmax(0, 1fr));
+        overflow: visible;
+        width: 100%;
+    }
+
+    .app-nav-link {
+        align-items: center;
+        border-radius: 12px;
+        display: flex;
+        flex-direction: column;
+        font-size: 0.68rem;
+        gap: 0.1rem;
+        padding: 0.4rem 0.1rem;
+        text-align: center;
+    }
+
+    .app-nav-link > .bi {
+        display: block;
+        font-size: 1.15rem;
+    }
+
+    /* Inventory rows become cards, so the actions menu is always visible. */
+    .inventory-table thead {
+        display: none;
+    }
+
+    .inventory-table tbody tr {
+        border-bottom: 1px solid var(--line);
+        display: grid;
+        gap: 0.35rem 0.75rem;
+        grid-template-areas: "item menu" "warranty amount";
+        grid-template-columns: minmax(0, 1fr) auto;
+        padding: 0.75rem 1rem;
+    }
+
+    .inventory-table tbody td {
+        border: 0 !important;
+        padding: 0 !important;
+    }
+
+    .inventory-table tbody td:nth-child(1) { grid-area: item; }
+    .inventory-table tbody td:nth-child(3) { grid-area: amount; align-self: start; }
+    .inventory-table tbody td:nth-child(4) { grid-area: warranty; min-width: 0 !important; }
+    .inventory-table tbody td:nth-child(5) { grid-area: menu; align-self: start; }
+
+    .inventory-table tbody td[colspan] {
+        grid-column: 1 / -1;
+    }
+
+    .inventory-name {
+        max-width: none;
+    }
+
+    /* Settings: the four sections as a 2 x 2 grid instead of a cut-off row. */
+    .settings-nav {
+        overflow: visible;
+    }
+
+    .settings-tabs {
+        display: grid !important;
+        gap: 0.4rem;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .settings-tab {
+        padding: 0.55rem 0.65rem;
+        width: 100% !important;
+    }
+
+    .settings-tab strong {
+        font-size: 0.82rem;
+    }
+
+    /* Members list: one card per person instead of a wide table. */
+    .members-table thead {
+        display: none;
+    }
+
+    .members-table tbody tr {
+        border-bottom: 1px solid var(--line);
+        display: grid;
+        gap: 0.25rem 0.75rem;
+        grid-template-areas: "name action" "email email" "role login";
+        grid-template-columns: minmax(0, 1fr) auto;
+        padding: 0.7rem 0;
+    }
+
+    .members-table tbody td {
+        border: 0 !important;
+        padding: 0 !important;
+        text-align: left !important;
+    }
+
+    .members-table tbody td:nth-child(1) { grid-area: name; }
+    .members-table tbody td:nth-child(2) { grid-area: email; font-size: 0.85rem; overflow-wrap: anywhere; }
+    .members-table tbody td:nth-child(3) { grid-area: role; }
+    .members-table tbody td:nth-child(4) { grid-area: login; text-align: right !important; }
+    .members-table tbody td:nth-child(5) { grid-area: action; }
+
+    .members-table tbody td[colspan] {
+        grid-column: 1 / -1;
+    }
+}
+
+/* ---- Assistant: delete one chat ---- */
+.ai-conv {
+    cursor: pointer;
+    position: relative;
+}
+
+.ai-conv-delete {
+    background: transparent;
+    border: 0;
+    border-radius: 8px;
+    color: var(--ink-500);
+    flex-shrink: 0;
+    opacity: 0;
+    padding: 0 0.3rem;
+}
+
+.ai-conv:hover .ai-conv-delete,
+.ai-conv:focus-within .ai-conv-delete,
+.ai-conv.active .ai-conv-delete {
+    opacity: 1;
+}
+
+.ai-conv-delete:hover {
+    color: #dc2626;
+}
+
+@media (hover: none) {
+    .ai-conv-delete {
+        opacity: 1;
+    }
+}
+
+/* ---- Dashboard: first six things that need attention, the rest behind "Show more" ---- */
+#dash-alerts:not(.show-all) .attention-item:nth-child(n + 7) {
+    display: none;
+}

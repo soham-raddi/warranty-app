@@ -6,6 +6,7 @@ import secrets
 import sqlite3
 import threading
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 # DATABASE_URL (Postgres, e.g. Supabase) is used when set; otherwise a local SQLite file, for development.
 DATABASE_URL = os.getenv('DATABASE_URL', '').strip()
@@ -586,7 +587,7 @@ def create_invite(workspace_id, email, role, invited_by):
     clean_email = email.strip().lower()
     existing_user = get_user_by_email(clean_email)
     if existing_user and get_membership_role(workspace_id, existing_user['id']):
-        return None, f'{clean_email} is already a member of this workspace'
+        return None, f'{clean_email} is already a member of this workspace.'
 
     cursor.execute(
         'SELECT id, expires_at, accepted_at FROM workspace_invites WHERE workspace_id = ? AND email = ?',
@@ -938,6 +939,7 @@ def get_inventory_analytics(workspace_id):
     active_warranties = 0
     home_currency = get_setting_value(workspace_id, 'currency_code', 'INR')
     rates = get_exchange_rates()
+    today = workspace_today(workspace_id)
 
     try:
         warranty_period_days = max(1, int(get_setting_value(workspace_id, 'warranty_period_days', '365')))
@@ -971,7 +973,7 @@ def get_inventory_analytics(workspace_id):
         months = item.get('warranty_months')
         expiry_date = _add_months(p_date, months) if months else p_date + timedelta(days=warranty_period_days)
         item['warranty_source'] = 'item' if months else 'default'
-        days_remaining = (expiry_date.date() - datetime.now().date()).days
+        days_remaining = (expiry_date.date() - today).days
         item['warranty_expires_on'] = expiry_date.strftime('%Y-%m-%d')
         item['days_remaining'] = days_remaining
 
@@ -1199,11 +1201,23 @@ def set_setting_value(workspace_id, key, value):
     return True
 
 
+def workspace_today(workspace_id):
+    """Today's date where the family lives (the server itself runs on UTC)."""
+    try:
+        zone = ZoneInfo(get_setting_value(workspace_id, 'timezone', 'UTC'))
+    except (ZoneInfoNotFoundError, ValueError):
+        zone = ZoneInfo('UTC')
+    return datetime.now(zone).date()
+
+
 def get_all_settings(workspace_id):
     result = dict(DEFAULT_SETTINGS)
     cursor.execute('SELECT key, value FROM workspace_settings WHERE workspace_id = ?', (workspace_id,))
-    for key, value in cursor.fetchall():
+    stored = cursor.fetchall()
+    for key, value in stored:
         result[key] = value
+    # Families who never chose a time zone get the browser's one in the app instead of UTC.
+    result['timezone_is_default'] = 'timezone' not in {key for key, _ in stored}
     result['currency_symbol'] = CURRENCY_SYMBOLS.get(result.get('currency_code'), result.get('currency_symbol'))
     return result
 
@@ -1257,7 +1271,7 @@ def transfer_ownership(workspace_id, from_user_id, to_user_id):
     if to_user_id == from_user_id:
         return 'You are already the owner'
     if not get_membership_role(workspace_id, to_user_id):
-        return 'That person is not a member of this workspace'
+        return 'That person is not a member of this workspace.'
     cursor.execute("UPDATE workspace_members SET role = 'admin' WHERE workspace_id = ? AND user_id = ?",
                    (workspace_id, from_user_id))
     cursor.execute("UPDATE workspace_members SET role = 'owner' WHERE workspace_id = ? AND user_id = ?",
@@ -1325,6 +1339,35 @@ def export_workspace_rows(workspace_id):
     history = [dict(zip(['item_id', 'item_name', 'service_date', 'service_type', 'vendor', 'cost', 'notes',
                          'next_service_date'], row)) for row in cursor.fetchall()]
     return items, history
+
+
+def update_service_history_entry(item_id, entry_id, fields):
+    """Callers must check the item belongs to their workspace first (item_exists)."""
+    columns = [c for c in fields if c in ('service_date', 'service_type', 'vendor', 'cost', 'notes', 'next_service_date')]
+    if not columns:
+        return False
+    cursor.execute(
+        f"UPDATE service_history SET {', '.join(f'{c} = ?' for c in columns)} WHERE id = ? AND item_id = ?",
+        [fields[c] for c in columns] + [entry_id, item_id]
+    )
+    conn.commit()
+    return cursor.rowcount > 0
+
+
+def delete_service_history_entry(item_id, entry_id):
+    cursor.execute('DELETE FROM service_history WHERE id = ? AND item_id = ?', (entry_id, item_id))
+    conn.commit()
+    return cursor.rowcount > 0
+
+
+def delete_chat_conversation(workspace_id, user_id, conversation_id):
+    """Deletes one of this person's conversations (never anyone else's)."""
+    cursor.execute(
+        'DELETE FROM chat_messages WHERE workspace_id = ? AND user_id = ? AND conversation_id = ?',
+        (workspace_id, user_id, conversation_id)
+    )
+    conn.commit()
+    return cursor.rowcount > 0
 
 
 # ---------------------------------------------------------------------------

@@ -1,7 +1,7 @@
 import json
 import re
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from flask import Blueprint, g, jsonify, request
 from werkzeug.utils import secure_filename
@@ -12,6 +12,7 @@ from database import (
     apply_warranty_card_details,
     delete_appliance,
     find_duplicate_receipt,
+    delete_service_history_entry,
     get_all_settings,
     get_appliance,
     item_exists,
@@ -22,6 +23,8 @@ from database import (
     parse_amount,
     save_receipt_to_db,
     update_appliance,
+    update_service_history_entry,
+    workspace_today,
     update_warranty_card,
 )
 import fx
@@ -77,20 +80,24 @@ def _clean_fields(payload, allowed):
             changes[field] = value or None
 
     if 'item_name' in changes and not changes['item_name']:
-        return None, 'Item name cannot be empty'
+        return None, 'Item name cannot be empty.'
+    if changes.get('total_amount'):
+        amount = parse_amount(changes['total_amount'])
+        if amount is None or amount < 0:
+            return None, 'Amount must be a number, like 1299 or 6.50.'
+        changes['total_amount'] = format_amount(amount)
     if 'currency' in changes and not changes['currency']:
         changes.pop('currency')  # an item always has a currency; leaving it blank keeps the current one
     if changes.get('currency'):
         # Checked on the submitted text, before it is cut to the field's length.
         raw_currency = str(payload.get('currency') or '').strip().upper()
         if not re.fullmatch(r'[A-Z]{3}', raw_currency):
-            return None, 'Currency must be a 3-letter code such as INR or MYR'
+            return None, 'Currency must be a 3-letter code such as INR or MYR.'
         changes['currency'] = raw_currency
     if changes.get('date_of_purchase'):
-        try:
-            datetime.strptime(changes['date_of_purchase'], '%Y-%m-%d')
-        except ValueError:
-            return None, 'Purchase date must be a valid date'
+        error = _date_error(changes['date_of_purchase'], 'Purchase date', allow_future=False)
+        if error:
+            return None, error
 
     if 'warranty_months' in payload:
         raw = payload.get('warranty_months')
@@ -100,11 +107,27 @@ def _clean_fields(payload, allowed):
             try:
                 months = int(raw)
             except (TypeError, ValueError):
-                return None, 'Warranty length must be a whole number of months'
+                return None, 'Warranty length must be a whole number of months.'
             if not 1 <= months <= 360:
-                return None, 'Warranty length must be between 1 and 360 months'
+                return None, 'Warranty length must be between 1 and 360 months.'
             changes['warranty_months'] = months
     return changes, None
+
+
+def format_amount(amount):
+    """1299.0 -> '1299', 6.5 -> '6.5'."""
+    return f'{amount:.2f}'.rstrip('0').rstrip('.')
+
+
+def _date_error(value, label, allow_future=True):
+    try:
+        day = datetime.strptime(value, '%Y-%m-%d').date()
+    except ValueError:
+        return f'{label} must be a valid date.'
+    # A day of slack, since the family may be ahead of the server's clock.
+    if not allow_future and day > workspace_today(g.workspace_id) + timedelta(days=1):
+        return f"{label} can't be in the future."
+    return None
 
 
 def _ensure_rates(currencies):
@@ -224,7 +247,7 @@ def get_inventory():
 def get_item(item_id):
     item = get_appliance(g.workspace_id, item_id)
     if not item:
-        return jsonify({'error': 'Inventory item not found'}), 404
+        return jsonify({'error': 'That item was not found. It may have been deleted.'}), 404
     return jsonify({'item': item})
 
 
@@ -232,7 +255,7 @@ def get_item(item_id):
 def edit_item(item_id):
     """Corrects details the scan got wrong. Any member may edit; deleting stays with owners and admins."""
     if not item_exists(g.workspace_id, item_id):
-        return jsonify({'error': 'Inventory item not found'}), 404
+        return jsonify({'error': 'That item was not found. It may have been deleted.'}), 404
 
     changes, error = _clean_fields(request.json or {}, EDITABLE_FIELDS)
     if error:
@@ -260,7 +283,7 @@ def warranty_card_file(item_id):
 def delete_item(item_id):
     found, file_path, warranty_card_path = delete_appliance(g.workspace_id, item_id)
     if not found:
-        return jsonify({'error': 'Inventory item not found'}), 404
+        return jsonify({'error': 'That item was not found. It may have been deleted.'}), 404
     storage.delete(file_path)
     storage.delete(warranty_card_path)
     return jsonify({'message': 'Item deleted.'})
@@ -278,7 +301,7 @@ def attach_warranty_card(item_id):
         return jsonify({"error": error}), 400
 
     if not item_exists(g.workspace_id, item_id):
-        return jsonify({"error": "Inventory item not found"}), 404
+        return jsonify({"error": "That item was not found. It may have been deleted."}), 404
 
     _, previous_card_path = get_appliance_file_paths(g.workspace_id, item_id)
     data = file.read()
@@ -289,7 +312,7 @@ def attach_warranty_card(item_id):
 
     if not update_warranty_card(g.workspace_id, item_id, ref):
         storage.delete(ref)
-        return jsonify({"error": "Inventory item not found"}), 404
+        return jsonify({"error": "That item was not found. It may have been deleted."}), 404
 
     # Replacing a card should not leave the old file behind
     if previous_card_path and previous_card_path != ref:
@@ -328,51 +351,79 @@ def _read_card_into_item(item_id, data, filename, attached):
     item = next((i for i in get_inventory_analytics(g.workspace_id)[0] if i['id'] == item_id), {})
     months = changes['warranty_months']
     length = f"{months // 12}-year" if months % 12 == 0 else f"{months}-month"
-    expiry = f", now valid until {item['warranty_expires_on']}" if item.get('warranty_expires_on') else ''
-    return {"message": f"Warranty card read: {length} warranty{expiry}.", "card_read": True,
+    # The page adds the end date in the family's chosen date format.
+    return {"message": f"Warranty card read: {length} warranty.", "card_read": True,
             "warranty_months": months, "warranty_expires_on": item.get('warranty_expires_on')}
 
 
 @receipts_bp.route('/api/inventory/<int:item_id>/service-history', methods=['GET'])
 def service_history(item_id):
     if not item_exists(g.workspace_id, item_id):
-        return jsonify({'error': 'Inventory item not found'}), 404
+        return jsonify({'error': 'That item was not found. It may have been deleted.'}), 404
     return jsonify({
         'item_id': item_id,
         'entries': get_service_history(item_id)
     })
 
 
+def _clean_service_entry(payload):
+    """Validates a service record. Returns (fields, error message)."""
+    fields = {
+        'service_date': str(payload.get('service_date', '')).strip()[:10],
+        'service_type': str(payload.get('service_type', '')).strip()[:120],
+        'vendor': str(payload.get('vendor', '')).strip()[:120],
+        'cost': str(payload.get('cost', '')).strip()[:40],
+        'notes': str(payload.get('notes', '')).strip()[:1000],
+        'next_service_date': str(payload.get('next_service_date', '')).strip()[:10],
+    }
+    if not fields['service_date']:
+        return None, 'Choose the date of the service.'
+    error = _date_error(fields['service_date'], 'Service date', allow_future=False)
+    if error:
+        return None, error
+    if not fields['service_type']:
+        return None, 'Enter what kind of service it was.'
+    if fields['cost']:
+        cost = parse_amount(fields['cost'])
+        if cost is None or cost < 0:
+            return None, 'Cost must be a number, like 1500.'
+        fields['cost'] = format_amount(cost)
+    if fields['next_service_date']:
+        error = _date_error(fields['next_service_date'], 'Next service date')
+        if error:
+            return None, error
+        if fields['next_service_date'] < fields['service_date']:
+            return None, 'The next service must be after this one.'
+    return fields, None
+
+
 @receipts_bp.route('/api/inventory/<int:item_id>/service-history', methods=['POST'])
 def add_history_entry(item_id):
     if not item_exists(g.workspace_id, item_id):
-        return jsonify({'error': 'Inventory item not found'}), 404
+        return jsonify({'error': 'That item was not found. It may have been deleted.'}), 404
+    fields, error = _clean_service_entry(request.json or request.form or {})
+    if error:
+        return jsonify({'error': error}), 400
+    entry_id = add_service_history_entry(item_id=item_id, **fields)
+    return jsonify({'message': 'Service record added.', 'entry_id': entry_id, 'entries': get_service_history(item_id)})
 
-    payload = request.json or request.form or {}
-    service_date = str(payload.get('service_date', '')).strip()[:10]
-    service_type = str(payload.get('service_type', '')).strip()[:120]
-    vendor = str(payload.get('vendor', '')).strip()[:120]
-    cost = str(payload.get('cost', '')).strip()[:40]
-    notes = str(payload.get('notes', '')).strip()[:1000]
-    next_service_date = str(payload.get('next_service_date', '')).strip()[:10]
 
-    if not service_date:
-        return jsonify({'error': 'service_date is required'}), 400
-    if not service_type:
-        return jsonify({'error': 'service_type is required'}), 400
+@receipts_bp.route('/api/inventory/<int:item_id>/service-history/<int:entry_id>', methods=['PATCH'])
+def edit_history_entry(item_id, entry_id):
+    if not item_exists(g.workspace_id, item_id):
+        return jsonify({'error': 'That item was not found. It may have been deleted.'}), 404
+    fields, error = _clean_service_entry(request.json or {})
+    if error:
+        return jsonify({'error': error}), 400
+    if not update_service_history_entry(item_id, entry_id, fields):
+        return jsonify({'error': 'That service record was not found.'}), 404
+    return jsonify({'message': 'Service record updated.', 'entries': get_service_history(item_id)})
 
-    entry_id = add_service_history_entry(
-        item_id=item_id,
-        service_date=service_date,
-        service_type=service_type,
-        vendor=vendor,
-        cost=cost,
-        notes=notes,
-        next_service_date=next_service_date,
-    )
 
-    return jsonify({
-        'message': 'Service record added.',
-        'entry_id': entry_id,
-        'entries': get_service_history(item_id)
-    })
+@receipts_bp.route('/api/inventory/<int:item_id>/service-history/<int:entry_id>', methods=['DELETE'])
+def delete_history_entry(item_id, entry_id):
+    if not item_exists(g.workspace_id, item_id):
+        return jsonify({'error': 'That item was not found. It may have been deleted.'}), 404
+    if not delete_service_history_entry(item_id, entry_id):
+        return jsonify({'error': 'That service record was not found.'}), 404
+    return jsonify({'message': 'Service record deleted.', 'entries': get_service_history(item_id)})

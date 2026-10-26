@@ -19,10 +19,10 @@
         <input type="file" id="receiptFile" class="visually-hidden" accept=".jpg,.jpeg,.png,.webp,.pdf">
         <!-- On phones this opens the camera directly -->
         <input type="file" id="receiptCamera" class="visually-hidden" accept="image/*" capture="environment">
-        <button type="button" class="btn btn-outline-primary w-100 mb-3 d-md-none" onclick="document.getElementById('receiptCamera').click()">
+        <button type="button" class="btn btn-outline-primary w-100 mb-3 d-md-none" data-action="open-camera">
             <i class="bi bi-camera"></i> Take a photo of the receipt
         </button>
-        <button class="btn btn-primary btn-lg w-100 d-flex align-items-center justify-content-center gap-2" id="upBtn" onclick="uploadReceipt()">
+        <button class="btn btn-primary btn-lg w-100 d-flex align-items-center justify-content-center gap-2" id="upBtn" data-action="scan-receipt">
             <span class="spinner-border spinner-border-sm d-none" id="upLoader" aria-hidden="true"></span>
             <span id="upBtnLabel">Scan receipt</span>
         </button>

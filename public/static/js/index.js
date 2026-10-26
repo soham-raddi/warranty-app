@@ -129,6 +129,25 @@ function money(value, currency) {
     }
 }
 
+function browserTimeZone() {
+    try {
+        return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+    } catch (e) {
+        return 'UTC';
+    }
+}
+
+function tidyAmount(value) {
+    // '24990.0' -> '24990', '6.50' -> '6.5'
+    const text = String(value ?? '').trim();
+    return /^\d+\.\d+$/.test(text) ? String(parseFloat(text)) : text;
+}
+
+function cardMessage(data, fallback = '') {
+    const until = data.card_read && data.warranty_expires_on ? ` Now valid until ${formatPlainDate(data.warranty_expires_on)}.` : '';
+    return (data.message || fallback) + until;
+}
+
 function setTotal(id, data) {
     // A total that includes converted amounts is approximate; items without an exchange rate are left out.
     const el = byId(id);
@@ -258,24 +277,32 @@ function truncateText(text, maxLength) {
 }
 
 let activeServiceHistoryItemId = null;
+let serviceEntries = [];
+let editingServiceEntryId = null;
 
 function renderServiceTimeline(entries) {
-    const history = Array.isArray(entries) ? entries : [];
-    if (!history.length) {
+    serviceEntries = Array.isArray(entries) ? entries : [];
+    if (!serviceEntries.length) {
         return stateBlock('No service history yet for this product.');
     }
 
-    return `<div class="service-timeline">${history.map(entry => `
+    return `<div class="service-timeline">${serviceEntries.map(entry => `
         <div class="service-timeline-item">
             <div class="service-timeline-dot"></div>
             <div class="service-timeline-card">
-                <div class="d-flex justify-content-between flex-wrap gap-2">
-                    <strong>${escapeHtml(entry.service_type || 'Service')}</strong>
-                    <span class="text-muted small">${escapeHtml(formatPlainDate(entry.service_date) || '')}</span>
+                <div class="d-flex justify-content-between align-items-start flex-wrap gap-2">
+                    <div>
+                        <strong>${escapeHtml(entry.service_type || 'Service')}</strong>
+                        <span class="text-muted small ms-2">${escapeHtml(formatPlainDate(entry.service_date) || '')}</span>
+                    </div>
+                    <div class="d-flex gap-1">
+                        <button type="button" class="btn btn-sm btn-link p-0 text-muted" data-action="edit-service" data-entry-id="${Number(entry.id)}" title="Edit this record" aria-label="Edit this record"><i class="bi bi-pencil"></i></button>
+                        <button type="button" class="btn btn-sm btn-link p-0 text-muted ms-2" data-action="delete-service" data-entry-id="${Number(entry.id)}" title="Delete this record" aria-label="Delete this record"><i class="bi bi-trash"></i></button>
+                    </div>
                 </div>
                 <div class="small text-muted mt-1">
                     ${entry.vendor ? `Vendor: ${escapeHtml(entry.vendor)}` : ''}
-                    ${entry.cost ? `${entry.vendor ? ' · ' : ''}Cost: ${escapeHtml(entry.cost)}` : ''}
+                    ${entry.cost ? `${entry.vendor ? ' · ' : ''}Cost: ${escapeHtml(money(entry.cost))}` : ''}
                 </div>
                 ${entry.notes ? `<p class="mb-0 mt-2">${escapeHtml(entry.notes)}</p>` : ''}
                 ${entry.next_service_date ? `<div class="small mt-2">Next service: ${escapeHtml(formatPlainDate(entry.next_service_date))}</div>` : ''}
@@ -284,95 +311,98 @@ function renderServiceTimeline(entries) {
     `).join('')}</div>`;
 }
 
+function setServiceStatus(text, tone = 'muted') {
+    const status = byId('serviceHistoryStatus');
+    if (!status) return;
+    status.className = `small mt-3 mb-0 text-${tone}`;
+    status.innerText = text;
+}
+
+function resetServiceForm() {
+    editingServiceEntryId = null;
+    byId('serviceHistoryForm')?.reset();
+    setText('serviceFormTitle', 'Add a service record');
+    setText('serviceSubmitLabel', 'Save record');
+    byId('serviceCancelEdit')?.classList.add('d-none');
+}
+
 async function openServiceHistory(itemId, itemName) {
     const modalEl = byId('serviceHistoryModal');
     if (!modalEl) return;
 
     activeServiceHistoryItemId = Number(itemId);
     setText('serviceHistoryTitle', itemName || 'Item');
-    const statusEl = byId('serviceHistoryStatus');
-    if (statusEl) statusEl.className = 'small mt-3 mb-0 text-muted';
-    setText('serviceHistoryStatus', 'Loading timeline...');
+    setServiceStatus('');
+    resetServiceForm();
     const listEl = byId('serviceHistoryList');
-    if (listEl) {
-        listEl.innerHTML = stateBlock('Loading service history...');
-    }
+    if (listEl) listEl.innerHTML = stateBlock('Loading service history…');
 
     try {
         const res = await fetch(`/api/inventory/${activeServiceHistoryItemId}/service-history`);
         const data = await res.json();
-        if (listEl) {
-            listEl.innerHTML = renderServiceTimeline(data.entries || []);
-        }
-        setText('serviceHistoryStatus', data.entries && data.entries.length ? `${data.entries.length} record(s) found.` : 'No service records yet.');
+        if (listEl) listEl.innerHTML = renderServiceTimeline(data.entries || []);
     } catch (e) {
-        if (listEl) {
-            listEl.innerHTML = stateBlock('Could not load service history.', true);
-        }
-        setText('serviceHistoryStatus', 'Could not load timeline.');
+        if (listEl) listEl.innerHTML = stateBlock('Could not load service history.', true);
     }
-
-    const form = byId('serviceHistoryForm');
-    if (form) form.reset();
     bootstrap.Modal.getOrCreateInstance(modalEl).show();
+}
+
+function editServiceEntry(entryId) {
+    const entry = serviceEntries.find(e => Number(e.id) === Number(entryId));
+    if (!entry) return;
+    editingServiceEntryId = Number(entryId);
+    const fields = { serviceDate: 'service_date', serviceType: 'service_type', serviceVendor: 'vendor', serviceCost: 'cost',
+                     serviceNotes: 'notes', serviceNextDate: 'next_service_date' };
+    Object.entries(fields).forEach(([id, key]) => { if (byId(id)) byId(id).value = entry[key] || ''; });
+    setText('serviceFormTitle', 'Edit service record');
+    setText('serviceSubmitLabel', 'Save changes');
+    byId('serviceCancelEdit')?.classList.remove('d-none');
+    byId('serviceType')?.focus();
+}
+
+async function deleteServiceEntry(entryId) {
+    if (!confirm('Delete this service record?')) return;
+    try {
+        const res = await fetch(`/api/inventory/${activeServiceHistoryItemId}/service-history/${Number(entryId)}`, { method: 'DELETE' });
+        const data = await readJsonResponse(res);
+        if (!res.ok) return setServiceStatus(data.error || 'Could not delete the service record.', 'danger');
+        byId('serviceHistoryList').innerHTML = renderServiceTimeline(data.entries || []);
+        if (editingServiceEntryId === Number(entryId)) resetServiceForm();
+        setServiceStatus('Service record deleted.', 'success');
+    } catch (e) {
+        setServiceStatus('Could not delete the service record.', 'danger');
+    }
 }
 
 async function saveServiceHistory(event) {
     if (event) event.preventDefault();
     if (!activeServiceHistoryItemId) return;
 
-    const serviceDate = byId('serviceDate');
-    const serviceType = byId('serviceType');
-    const vendor = byId('serviceVendor');
-    const cost = byId('serviceCost');
-    const notes = byId('serviceNotes');
-    const nextServiceDate = byId('serviceNextDate');
-    const status = byId('serviceHistoryStatus');
-
+    const value = id => (byId(id)?.value || '').trim();
     const payload = {
-        service_date: serviceDate ? serviceDate.value : '',
-        service_type: serviceType ? serviceType.value.trim() : '',
-        vendor: vendor ? vendor.value.trim() : '',
-        cost: cost ? cost.value.trim() : '',
-        notes: notes ? notes.value.trim() : '',
-        next_service_date: nextServiceDate ? nextServiceDate.value : ''
+        service_date: value('serviceDate'),
+        service_type: value('serviceType'),
+        vendor: value('serviceVendor'),
+        cost: value('serviceCost'),
+        notes: value('serviceNotes'),
+        next_service_date: value('serviceNextDate')
     };
+    const editing = editingServiceEntryId;
+    const url = `/api/inventory/${activeServiceHistoryItemId}/service-history${editing ? `/${editing}` : ''}`;
 
     try {
-        const res = await fetch(`/api/inventory/${activeServiceHistoryItemId}/service-history`, {
-            method: 'POST',
+        const res = await fetch(url, {
+            method: editing ? 'PATCH' : 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(payload)
         });
-        const data = await res.json();
-
-        if (!res.ok) {
-            if (status) {
-                status.className = 'small mt-3 mb-0 text-danger';
-                status.innerText = data.error || 'Could not save the service record.';
-            }
-            return;
-        }
-
-        if (status) {
-            status.className = 'small mt-3 mb-0 text-success';
-            status.innerText = 'Service record saved.';
-        }
-
-        const listEl = byId('serviceHistoryList');
-        if (listEl) {
-            listEl.innerHTML = renderServiceTimeline(data.entries || []);
-        }
-        if (serviceType) serviceType.value = '';
-        if (vendor) vendor.value = '';
-        if (cost) cost.value = '';
-        if (notes) notes.value = '';
-        if (nextServiceDate) nextServiceDate.value = '';
+        const data = await readJsonResponse(res);
+        if (!res.ok) return setServiceStatus(data.error || 'Could not save the service record.', 'danger');
+        byId('serviceHistoryList').innerHTML = renderServiceTimeline(data.entries || []);
+        resetServiceForm();
+        setServiceStatus(editing ? 'Service record updated.' : 'Service record saved.', 'success');
     } catch (e) {
-        if (status) {
-            status.className = 'small mt-3 mb-0 text-danger';
-            status.innerText = 'Could not save the service record.';
-        }
+        setServiceStatus('Could not save the service record.', 'danger');
     }
 }
 
@@ -894,7 +924,7 @@ async function rereadWarrantyCard(id) {
         const res = await fetch(`/api/inventory/${Number(id)}/read-warranty-card`, { method: 'POST' });
         const data = await readJsonResponse(res);
         if (!res.ok) return showToast(data.error || 'Could not read the warranty card.', 'danger');
-        showToast(data.message, data.card_read ? 'success' : 'warning');
+        showToast(cardMessage(data), data.card_read ? 'success' : 'warning');
         await Promise.all([loadInventory(), loadDashboard()]);
     } catch (e) {
         showToast('Could not read the warranty card.', 'danger');
@@ -925,7 +955,7 @@ async function loadDashboard() {
             } else {
                 recentBody.innerHTML = items.slice(0, 6).map(i => `
                     <tr>
-                        <td class="ps-4"><strong>${escapeHtml(i.item_name || 'Unknown')}</strong><br><small class="text-muted">${escapeHtml(i.brand || 'N/A')}</small></td>
+                        <td class="ps-4"><strong>${escapeHtml(i.item_name || 'Unknown')}</strong>${i.brand ? `<br><small class="text-muted">${escapeHtml(i.brand)}</small>` : ''}</td>
                         <td class="text-nowrap">${escapeHtml(formatPlainDate(i.date_of_purchase) || 'Unknown')}</td>
                         <td class="text-nowrap">${itemAmount(i)}</td>
                         <td class="pe-4">${warrantyBadge(i.warranty_status)}</td>
@@ -977,8 +1007,11 @@ async function loadDashboard() {
                 `);
             });
 
+            alerts.classList.remove('show-all');
             alerts.innerHTML = blocks.length
-                ? `<div class="dashboard-attention-list">${blocks.slice(0, 6).join('')}</div>`
+                ? `<div class="dashboard-attention-list">${blocks.join('')}</div>` + (blocks.length > 6
+                    ? `<button type="button" class="btn btn-link btn-sm px-0 mt-2" data-action="show-all-attention">Show ${blocks.length - 6} more</button>`
+                    : '')
                 : stateBlock('Everything looks good. Nothing needs your attention right now.');
         }
     } catch (e) {
@@ -1027,7 +1060,7 @@ async function attachWarrantyCard(id) {
                 showToast(data.error || 'Could not attach the warranty card.', 'danger');
                 return;
             }
-            showToast(data.message || 'Warranty card attached.', data.card_read ? 'success' : 'warning');
+            showToast(cardMessage(data, 'Warranty card attached.'), data.card_read ? 'success' : 'warning');
             await Promise.all([loadInventory(), loadDashboard()]);
         } catch (e) {
             showToast('Could not upload the warranty card.', 'danger');
@@ -1198,11 +1231,13 @@ function renderRecentConversationsSidebar(conversations) {
         <div class="ai-conv-group">
             <div class="ai-conv-label">${escapeHtml(groups[key].label)}</div>
             ${groups[key].items.map(item => `
-                <button type="button" class="ai-conv ${item.conversation_id === currentConversationId ? 'active' : ''}"
-                        data-action="open-conversation" data-conversation-id="${escapeHtml(String(item.conversation_id || ''))}">
+                <div class="ai-conv ${item.conversation_id === currentConversationId ? 'active' : ''}" role="button" tabindex="0"
+                     data-action="open-conversation" data-conversation-id="${escapeHtml(String(item.conversation_id || ''))}">
                     <span class="ai-conv-title">${escapeHtml(truncateText(item.title || 'New chat', 200))}</span>
                     <span class="ai-conv-time">${formatTime(item.updated_at || item.created_at) || ''}</span>
-                </button>`).join('')}
+                    <button type="button" class="ai-conv-delete" data-action="delete-chat" data-conversation-id="${escapeHtml(String(item.conversation_id || ''))}"
+                            title="Delete this chat" aria-label="Delete this chat"><i class="bi bi-trash3"></i></button>
+                </div>`).join('')}
         </div>`).join('');
     updateChatTitle();
 }
@@ -1266,16 +1301,21 @@ function startNewConversation() {
     byId('chatInput')?.focus();
 }
 
+let conversationListRequest = 0;
+
 async function loadConversationList(query = '') {
     activeConversationFilter = query || '';
+    const request = ++conversationListRequest;
     try {
         const url = query
             ? `/api/chat/conversations?limit=100&query=${encodeURIComponent(query)}`
             : '/api/chat/conversations?limit=100';
         const res = await fetch(url);
         const data = await res.json();
+        if (request !== conversationListRequest) return;  // a newer search already replaced this one
         lastConversationList = Array.isArray(data.conversations) ? data.conversations : [];
     } catch (e) {
+        if (request !== conversationListRequest) return;
         lastConversationList = [];
     }
     renderRecentConversationsSidebar(lastConversationList);
@@ -1302,6 +1342,19 @@ async function openConversation(conversationId) {
         renderChatThread(activeConversationMessages);
     } catch (e) {
         if (box) box.innerHTML = '<div class="ai-thread-status text-danger">Could not load this conversation.</div>';
+    }
+}
+
+async function deleteConversation(conversationId) {
+    if (!conversationId || !confirm('Delete this chat? This cannot be undone.')) return;
+    try {
+        const res = await fetch(`/api/chat/conversations/${encodeURIComponent(conversationId)}`, { method: 'DELETE' });
+        const data = await readJsonResponse(res);
+        if (!res.ok) return showToast(data.error || 'Could not delete the chat.', 'danger');
+        if (conversationId === currentConversationId) startNewConversation();
+        await loadConversationList(activeConversationFilter);
+    } catch (e) {
+        showToast('Could not delete the chat.', 'danger');
     }
 }
 
@@ -1383,6 +1436,13 @@ function initAssistant() {
         }
     });
     input.addEventListener('input', resizeChatInput);
+    byId('recentConversations')?.addEventListener('keydown', event => {
+        const row = event.target.closest('.ai-conv');
+        if (row && event.target === row && (event.key === 'Enter' || event.key === ' ')) {
+            event.preventDefault();
+            openConversation(row.dataset.conversationId);
+        }
+    });
     // On phones the chat list slides over the chat; tapping the chat closes it.
     document.querySelector('.ai-main')?.addEventListener('click', event => {
         if (byId('aiShell')?.classList.contains('sidebar-open') && !event.target.closest('.ai-icon-btn')) toggleChatSidebar(false);
@@ -1408,6 +1468,17 @@ async function loadSettings() {
         const data = await res.json();
         const settings = data.settings || {};
         appSettings.timezone = settings.timezone || appSettings.timezone;
+        if (settings.timezone_is_default) {
+            // Nobody chose a time zone yet: use this device's instead of UTC, and remember it for the family.
+            appSettings.timezone = browserTimeZone();
+            if (canManageWorkspace() && appSettings.timezone !== 'UTC') {
+                fetch('/api/settings/timezone', {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ timezone: appSettings.timezone })
+                }).catch(() => {});
+            }
+        }
         const resolvedCurrencyCode = (settings.currency_code || inferCurrencyCodeFromSymbol(settings.currency_symbol) || appSettings.currency_code || 'INR').toUpperCase();
         appSettings.currency_code = resolvedCurrencyCode;
         appSettings.currency_symbol = settings.currency_symbol || getCurrencyOption(appSettings.currency_code).symbol;
@@ -1428,6 +1499,20 @@ async function loadSettings() {
     }
 }
 
+function fillTimeZones(select, current) {
+    // Every time zone the browser knows (e.g. Asia/Kuala_Lumpur), with the current one selected.
+    let zones = [];
+    try {
+        zones = Intl.supportedValuesOf('timeZone');
+    } catch (e) {
+        zones = [...select.options].map(o => o.value);
+    }
+    if (!zones.includes('UTC')) zones.unshift('UTC');
+    if (current && !zones.includes(current)) zones.unshift(current);
+    select.innerHTML = zones.map(z => `<option value="${escapeHtml(z)}">${escapeHtml(z.replace(/_/g, ' '))}</option>`).join('');
+    select.value = current;
+}
+
 async function loadSettingsIntoForm() {
     if (!byId('settingsForm')) return;
 
@@ -1446,7 +1531,7 @@ async function loadSettingsIntoForm() {
     const motionInput = byId('settingsReducedMotion');
     const densityInput = byId('settingsDensity');
 
-    if (timezoneInput) timezoneInput.value = appSettings.timezone || 'UTC';
+    if (timezoneInput) fillTimeZones(timezoneInput, appSettings.timezone || 'UTC');
     if (currencyInput) currencyInput.value = appSettings.currency_code || 'INR';
     if (warrantyInput) warrantyInput.value = appSettings.warranty_period_days || '365';
     if (expiryAlertInput) expiryAlertInput.value = appSettings.expiry_alert_days || '30';
@@ -1563,6 +1648,44 @@ document.addEventListener('click', (event) => {
         case 'reread-card':
             rereadWarrantyCard(itemId);
             break;
+        case 'edit-service':
+            editServiceEntry(Number(target.dataset.entryId));
+            break;
+        case 'delete-service':
+            deleteServiceEntry(Number(target.dataset.entryId));
+            break;
+        case 'cancel-service-edit':
+            resetServiceForm();
+            break;
+        case 'new-chat':
+            startNewConversation();
+            break;
+        case 'clear-chats':
+            clearChatHistory();
+            break;
+        case 'toggle-chats':
+            toggleChatSidebar();
+            break;
+        case 'delete-chat':
+            event.stopPropagation();
+            deleteConversation(target.dataset.conversationId);
+            break;
+        case 'send-reminders':
+            sendReminderEmailsNow();
+            break;
+        case 'discard-settings':
+            loadSettingsIntoForm();
+            break;
+        case 'open-camera':
+            byId('receiptCamera')?.click();
+            break;
+        case 'scan-receipt':
+            uploadReceipt();
+            break;
+        case 'show-all-attention':
+            byId('dash-alerts')?.classList.add('show-all');
+            target.remove();
+            break;
         case 'clear-inventory-filters':
             clearInventoryFilters();
             break;
@@ -1573,6 +1696,7 @@ document.addEventListener('click', (event) => {
             dismissPendingImport(Number(target.dataset.pendingId));
             break;
         case 'open-conversation':
+            if (event.target.closest('[data-action="delete-chat"]')) break;
             openConversation(target.dataset.conversationId);
             break;
         case 'chat-suggestion':
@@ -1619,7 +1743,7 @@ async function createWorkspace(name) {
     const res = await fetch('/api/workspaces', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name })
+        body: JSON.stringify({ name, timezone: browserTimeZone() })
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data.error || 'Could not create the workspace.');
@@ -1637,6 +1761,9 @@ document.addEventListener('submit', async (event) => {
         showToast(e.message, 'danger');
     }
 });
+
+byId('serviceHistoryForm')?.addEventListener('submit', saveServiceHistory);
+byId('settingsForm')?.addEventListener('submit', saveSettings);
 
 window.onload = async () => {
     initDropZone();
@@ -1667,6 +1794,7 @@ async function openEditItem(itemId) {
         [...form.elements].forEach(field => {
             if (field.name) field.value = data.item[field.name] ?? '';
         });
+        if (form.elements.total_amount) form.elements.total_amount.value = tidyAmount(data.item.total_amount);
         bootstrap.Modal.getOrCreateInstance(modalEl).show();
     } catch (e) {
         showToast(e.message, 'danger');

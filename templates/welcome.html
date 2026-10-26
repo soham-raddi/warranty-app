@@ -125,7 +125,7 @@
                 <div class="welcome-option">
                     <div class="fw-semibold mb-1"><i class="bi bi-envelope-open me-1"></i> Joining your family?</div>
                     <p class="small text-muted mb-2">Ask the person who runs your family's workspace for an <strong>invite link</strong> and open it. If they invited <strong>{{ user.email }}</strong> directly, refresh this page.</p>
-                    <button type="button" class="btn btn-outline-secondary btn-sm" onclick="window.location.reload()"><i class="bi bi-arrow-clockwise"></i> I've been invited: check again</button>
+                    <a href="{{ url_for('workspaces.welcome_page') }}" class="btn btn-outline-secondary btn-sm"><i class="bi bi-arrow-clockwise"></i> I've been invited: check again</a>
                 </div>
 
                 <form method="post" action="{{ url_for('auth.logout') }}" class="text-center mt-3">
@@ -136,7 +136,7 @@
     </div>
 
     {% if can_create %}
-    <script>
+    <script nonce="{{ csp_nonce }}">
         document.getElementById('welcomeCreateForm').addEventListener('submit', async (event) => {
             event.preventDefault();
             const button = document.getElementById('welcomeCreateBtn');
@@ -147,7 +147,10 @@
                 const res = await fetch('/api/workspaces', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ name: document.getElementById('welcomeWorkspaceName').value.trim() })
+                    body: JSON.stringify({
+                        name: document.getElementById('welcomeWorkspaceName').value.trim(),
+                        timezone: Intl.DateTimeFormat().resolvedOptions().timeZone
+                    })
                 });
                 const data = await res.json().catch(() => ({}));
                 if (!res.ok) throw new Error(data.error || 'Could not create the workspace.');

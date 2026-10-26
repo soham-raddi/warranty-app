@@ -14,7 +14,7 @@ from database import (
 )
 from ratelimit import limit
 from .auth import role_required
-from .workspaces import EMAIL_PATTERN
+from .workspaces import EMAIL_PATTERN, valid_timezone
 
 settings_bp = Blueprint('settings', __name__)
 
@@ -41,7 +41,9 @@ def get_settings():
 def update_settings():
     payload = request.json or {}
 
-    timezone = str(payload.get('timezone', 'UTC')).strip() or 'UTC'
+    timezone = valid_timezone(str(payload.get('timezone', 'UTC')).strip() or 'UTC')
+    if not timezone:
+        return jsonify({'error': 'Choose a time zone from the list.'}), 400
     currency_code = str(payload.get('currency_code', 'INR')).strip().upper() or 'INR'
     theme_mode = _pick_option(payload, 'theme_mode', 'system', {'system', 'light', 'dark'})
     accent_color = _pick_option(payload, 'accent_color', 'blue', {'blue', 'teal', 'amber', 'rose', 'slate'})
@@ -117,6 +119,18 @@ def update_settings():
     set_setting_value(g.workspace_id, 'reminder_recipients', reminder_recipients)
 
     return jsonify({'message': 'Settings saved.', 'settings': get_all_settings(g.workspace_id)})
+
+
+@settings_bp.route('/api/settings/timezone', methods=['PUT'])
+@role_required('owner', 'admin')
+def set_timezone():
+    """Remembers the family's time zone the first time an owner or admin opens the app (instead of UTC)."""
+    timezone = valid_timezone((request.json or {}).get('timezone'))
+    if not timezone:
+        return jsonify({'error': 'Choose a time zone from the list.'}), 400
+    if get_all_settings(g.workspace_id).get('timezone_is_default'):
+        set_setting_value(g.workspace_id, 'timezone', timezone)
+    return jsonify({'timezone': get_all_settings(g.workspace_id)['timezone']})
 
 
 @settings_bp.route('/api/reminders/send', methods=['POST'])

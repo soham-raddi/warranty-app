@@ -170,6 +170,13 @@ def dev_login():
     return redirect(start_session(user, safe_next_url(request.args.get('next'))))
 
 
+@auth_bp.route('/auth/logout', methods=['GET'])
+def logout_page():
+    # Signing out stays a POST (another site can't sign you out with a link); opening the address just asks.
+    return render_template('message.html', title='Sign out?', text='You can sign back in with Google at any time.',
+                           sign_out=True)
+
+
 @auth_bp.route('/auth/logout', methods=['POST'])
 def logout():
     # POST only, so another site cannot sign you out with a plain link.

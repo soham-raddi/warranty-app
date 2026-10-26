@@ -155,6 +155,11 @@
                         Google sign-in isn't set up yet. Add <code>GOOGLE_CLIENT_ID</code> and <code>GOOGLE_CLIENT_SECRET</code> to your <code>.env</code> file.
                     </div>
                 </div>
+                {% elif error == 'dev_disabled' %}
+                <div class="alert alert-info d-flex align-items-start gap-2 py-2 px-3 small" role="alert">
+                    <i class="bi bi-info-circle-fill fs-5 flex-shrink-0"></i>
+                    <div>Test sign-in isn't available on this site. Please sign in with Google.</div>
+                </div>
                 {% endif %}
 
                 {% if google_configured %}

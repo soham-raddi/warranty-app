@@ -130,7 +130,8 @@ def _ask_vision_model(prompt, data, filename):
     try:
         image_list = encode_image(data, filename)
     except Exception as e:
-        return {"error": f"Failed to read file: {e}"}
+        print(f"Could not open uploaded file: {e}")
+        return {"error": "This file couldn't be opened. It may be damaged; try another photo or PDF."}
 
     content_payload = [{"type": "text", "text": prompt}]
     for base64_image, mime_type in image_list:

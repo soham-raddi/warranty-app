@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="robots" content="noindex">
+    <title>{{ title }} | Digital Twin</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.5/font/bootstrap-icons.css">
+    <style>
+        body {
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 1.5rem;
+            background: linear-gradient(135deg, rgba(15, 23, 42, 0.04) 0%, rgba(59, 130, 246, 0.06) 100%);
+            font-family: 'Segoe UI', system-ui, sans-serif;
+            color: #0f172a;
+        }
+        .message-card {
+            width: 100%;
+            max-width: 420px;
+            background: #ffffff;
+            border-radius: 1rem;
+            box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.08);
+            border: 1px solid rgba(226, 232, 240, 0.9);
+            padding: 2rem;
+            text-align: center;
+        }
+        .message-icon {
+            width: 54px;
+            height: 54px;
+            border-radius: 12px;
+            background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%);
+            color: #ffffff;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.5rem;
+            margin-bottom: 1rem;
+        }
+    </style>
+</head>
+<body>
+    <main class="message-card">
+        <div class="message-icon"><i class="bi {{ 'bi-box-arrow-right' if sign_out else 'bi-signpost-split' }}"></i></div>
+        <h1 class="h4 fw-bold">{{ title }}</h1>
+        <p class="text-muted">{{ text }}</p>
+        {% if sign_out %}
+        <form method="post" action="{{ url_for('auth.logout') }}" class="d-grid gap-2">
+            <button type="submit" class="btn btn-primary">Sign out</button>
+            <a href="/" class="btn btn-outline-secondary">Stay signed in</a>
+        </form>
+        {% else %}
+        <a href="/" class="btn btn-primary">Go to Digital Twin</a>
+        {% endif %}
+    </main>
+</body>
+</html>

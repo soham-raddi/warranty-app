@@ -13,7 +13,7 @@ if not os.getenv('SKIP_DOTENV'):
 
 from datetime import datetime, timedelta
 
-from flask import Flask, g, jsonify, redirect, request, send_from_directory, session, url_for
+from flask import Flask, g, jsonify, redirect, render_template, request, send_from_directory, session, url_for
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 import emails
@@ -120,6 +120,11 @@ UNSAFE_METHODS = {'POST', 'PUT', 'PATCH', 'DELETE'}
 
 
 @app.before_request
+def make_csp_nonce():
+    g.csp_nonce = secrets.token_urlsafe(16)
+
+
+@app.before_request
 def reject_cross_site_requests():
     """CSRF protection: browsers send Origin (or Referer) on form posts and fetch calls; changes must come from
     this site. Requests without either header can't carry someone's cookie from another site."""
@@ -196,7 +201,8 @@ def enforce_authentication():
 # Only our own code plus the jsdelivr CDN (Bootstrap, icons, marked, DOMPurify) may run or load.
 CONTENT_SECURITY_POLICY = '; '.join([
     "default-src 'self'",
-    "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net",
+    # Inline <script> blocks must carry this request's nonce, so injected scripts can never run.
+    "script-src 'self' 'nonce-{nonce}' https://cdn.jsdelivr.net",
     "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net",
     "font-src 'self' data: https://cdn.jsdelivr.net",
     "img-src 'self' data: blob: https:",
@@ -216,7 +222,8 @@ def add_security_headers(response):
     response.headers.setdefault('Permissions-Policy', 'camera=(self), microphone=(), geolocation=()')
     if response.mimetype == 'text/html':
         # Receipts (PDFs, images) are left without a policy so the browser's viewer keeps working.
-        response.headers.setdefault('Content-Security-Policy', CONTENT_SECURITY_POLICY)
+        response.headers.setdefault('Content-Security-Policy',
+                                    CONTENT_SECURITY_POLICY.replace('{nonce}', g.get('csp_nonce') or 'none'))
     if IS_PRODUCTION:
         response.headers.setdefault('Strict-Transport-Security', 'max-age=31536000; includeSubDomains')
     if request.path.startswith(('/api/', '/files/')) or g.get('current_user'):
@@ -234,6 +241,27 @@ def release_database(_error=None):
 def file_too_large(_error):
     limit_mb = MAX_UPLOAD_BYTES // (1024 * 1024)
     return jsonify({'error': f'File is too large. The maximum upload size is {limit_mb} MB.'}), 413
+
+
+def _error_page(status, title, text):
+    if request.path.startswith('/api/'):
+        return jsonify({'error': text}), status
+    return render_template('message.html', title=title, text=text, status=status), status
+
+
+@app.errorhandler(404)
+def not_found(_error):
+    return _error_page(404, 'Page not found', "This page doesn't exist, or the file was deleted.")
+
+
+@app.errorhandler(405)
+def method_not_allowed(_error):
+    return _error_page(405, 'Not available', "That address can't be opened directly.")
+
+
+@app.errorhandler(500)
+def server_error(_error):
+    return _error_page(500, 'Something went wrong', 'Please try again in a moment.')
 
 
 @app.route('/manifest.webmanifest')
@@ -264,6 +292,7 @@ def inject_current_user():
         'contact_email': contact_email(),
         'current_year': datetime.now().year,
         'ui': ui,
+        'csp_nonce': g.get('csp_nonce', ''),
     }
 
 

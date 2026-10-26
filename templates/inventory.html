@@ -150,8 +150,8 @@
             <div class="modal-body">
                 <div id="serviceHistoryList" class="mb-4"></div>
 
-                <h6 class="fw-semibold mb-3">Add a service record</h6>
-                <form id="serviceHistoryForm" class="row g-3" onsubmit="saveServiceHistory(event)">
+                <h6 class="fw-semibold mb-3" id="serviceFormTitle">Add a service record</h6>
+                <form id="serviceHistoryForm" class="row g-3">
                     <div class="col-md-6">
                         <label class="form-label" for="serviceDate">Service date</label>
                         <input id="serviceDate" type="date" class="form-control" required>
@@ -176,8 +176,9 @@
                         <label class="form-label" for="serviceNextDate">Next service due</label>
                         <input id="serviceNextDate" type="date" class="form-control">
                     </div>
-                    <div class="col-md-6 d-flex align-items-end">
-                        <button type="submit" class="btn btn-primary w-100"><i class="bi bi-plus-circle"></i> Save record</button>
+                    <div class="col-md-6 d-flex align-items-end gap-2">
+                        <button type="button" class="btn btn-outline-secondary d-none" id="serviceCancelEdit" data-action="cancel-service-edit">Cancel</button>
+                        <button type="submit" class="btn btn-primary flex-grow-1"><i class="bi bi-check-lg"></i> <span id="serviceSubmitLabel">Save record</span></button>
                     </div>
                 </form>
                 <p id="serviceHistoryStatus" class="small mt-3 mb-0 text-muted"></p>

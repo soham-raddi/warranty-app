@@ -4,6 +4,8 @@ import os
 import re
 from datetime import datetime
 
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
 from flask import Blueprint, Response, g, jsonify, redirect, render_template, request, session, url_for
 
 import emails
@@ -28,6 +30,7 @@ from database import (
     regenerate_invite_token,
     remove_workspace_member,
     rename_workspace,
+    set_setting_value,
 )
 from ratelimit import limit
 from .auth import is_dev_login_allowed, is_google_configured, role_required
@@ -48,6 +51,15 @@ def new_workspaces_allowed():
 def _clean_name(raw):
     name = re.sub(r'\s+', ' ', str(raw or '')).strip()
     return name[:MAX_NAME_LENGTH]
+
+
+def valid_timezone(value):
+    """The IANA time zone name if the server knows it (e.g. Asia/Kuala_Lumpur), else None."""
+    try:
+        ZoneInfo(str(value or ''))
+        return str(value)
+    except (ZoneInfoNotFoundError, ValueError):
+        return None
 
 
 @workspaces_bp.app_template_filter('nice_date')
@@ -119,6 +131,9 @@ def create_my_workspace():
     payload = request.json or {}
     name = _clean_name(payload.get('name')) or _default_workspace_name(user)
     workspace_id = create_workspace(name, user['id'])
+    timezone = valid_timezone(payload.get('timezone'))
+    if timezone:
+        set_setting_value(workspace_id, 'timezone', timezone)  # start in the creator's time zone, not UTC
     session['workspace_id'] = workspace_id
     return jsonify({'workspace': {'id': workspace_id, 'name': name, 'role': 'owner'}}), 201
 
@@ -129,7 +144,7 @@ def switch_workspace():
     try:
         workspace_id = int(payload.get('workspace_id'))
     except (TypeError, ValueError):
-        return jsonify({'error': 'workspace_id is required'}), 400
+        return jsonify({'error': 'Choose a workspace.'}), 400
 
     if not get_membership_role(workspace_id, g.current_user['id']):
         return jsonify({'error': 'You are not a member of that workspace.'}), 403
@@ -204,7 +219,7 @@ def new_invite_link(invite_id):
     # Only a hash of each link is stored, so a lost link is replaced rather than shown again.
     result = regenerate_invite_token(g.workspace_id, invite_id)
     if not result:
-        return jsonify({'error': 'Invite not found'}), 404
+        return jsonify({'error': 'That invite was not found. It may have been used or revoked.'}), 404
     token, expires_at = result
     return jsonify({'link': _invite_link(token), 'expires_at': expires_at,
                     'message': 'New invite link created. The previous link no longer works.'})
@@ -217,12 +232,12 @@ def email_invite_again(invite_id):
     invite = next((i for i in list_invites(g.workspace_id) if i['id'] == invite_id), None)
     result = regenerate_invite_token(g.workspace_id, invite_id) if invite else None
     if not result:
-        return jsonify({'error': 'Invite not found'}), 404
+        return jsonify({'error': 'That invite was not found. It may have been used or revoked.'}), 404
     token, expires_at = result
     link = _invite_link(token)
     email_error = _email_invite(invite['email'], link, expires_at)
     if email_error:
-        return jsonify({'error': email_error, 'link': link}), 502
+        return jsonify({'error': email_error, 'link': link, 'expires_at': expires_at, 'email': invite['email']}), 502
     return jsonify({'message': f"Invite emailed to {invite['email']} again. Older links no longer work.",
                     'link': link, 'expires_at': expires_at})
 
@@ -231,7 +246,7 @@ def email_invite_again(invite_id):
 @role_required('owner', 'admin')
 def revoke_invite(invite_id):
     if not delete_invite(g.workspace_id, invite_id):
-        return jsonify({'error': 'Invite not found'}), 404
+        return jsonify({'error': 'That invite was not found. It may have been used or revoked.'}), 404
     return jsonify({'message': 'Invite revoked.'})
 
 
@@ -336,7 +351,8 @@ def export_workspace():
     buffer = io.StringIO()
     writer = csv.writer(buffer)
     columns = ['id', 'item_name', 'brand', 'model_number', 'serial_number', 'category', 'date_of_purchase',
-               'total_amount', 'store_name', 'invoice_number', 'warranty_months', 'warranty_expires_on',
+               'total_amount', 'currency', 'home_amount', 'store_name', 'invoice_number', 'warranty_months',
+               'warranty_expires_on',
                'warranty_status', 'warranty_info', 'return_policy', 'has_warranty_card']
     writer.writerow(['Inventory'])
     writer.writerow(columns)
