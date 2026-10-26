@@ -1285,5 +1285,21 @@ class ZZZZZAuditFixTests(unittest.TestCase):
         self.assertIn('MYR', text)
 
 
+class ZZZZZZServiceCurrencyTests(unittest.TestCase):
+
+    def test_service_records_keep_their_own_currency(self):
+        owner = new_family('repairs@example.com', 'Repairs Family')  # INR
+        save(owner, {'receipt': {'invoice_number': 'RP-1', 'currency': 'MYR'}, 'items': [{'item_name': 'Servo', 'amount': '6.5'}]})
+        item_id = owner.get('/api/inventory').json['items'][0]['id']
+        url = f'/api/inventory/{item_id}/service-history'
+        default = owner.post(url, json={'service_date': '2026-10-01', 'service_type': 'Repair', 'cost': '20'}).json['entries'][0]
+        self.assertEqual(default['currency'], 'MYR', "defaults to the item's currency")
+        chosen = owner.post(url, json={'service_date': '2026-10-02', 'service_type': 'Check', 'cost': '499',
+                                       'currency': 'inr'}).json['entries'][0]
+        self.assertEqual(chosen['currency'], 'INR')
+        self.assertEqual(owner.post(url, json={'service_date': '2026-10-03', 'service_type': 'X', 'currency': 'rupees'}).status_code, 400)
+        self.assertIn('currency', owner.get('/api/workspace/export.csv').get_data(as_text=True).split('Service history')[1])
+
+
 if __name__ == '__main__':
     unittest.main(verbosity=2)

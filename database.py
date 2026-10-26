@@ -179,7 +179,8 @@ def _schema_statements():
             cost TEXT,
             notes TEXT,
             next_service_date TEXT,
-            created_at TEXT NOT NULL DEFAULT ({now})
+            created_at TEXT NOT NULL DEFAULT ({now}),
+            currency TEXT
         )''',
         # Settings from before workspaces existed; kept so older versions of the app still work.
         '''CREATE TABLE IF NOT EXISTS app_settings (
@@ -306,8 +307,9 @@ _ADDED_COLUMNS = [
     ('workspace_invites', 'accepted_at TEXT'),
     ('workspace_invites', 'accepted_by INTEGER'),
     ('appliances_v5', 'currency TEXT'),
+    ('service_history', 'currency TEXT'),
 ]
-SCHEMA_VERSION = '6'
+SCHEMA_VERSION = '7'
 
 
 def _upgrade_old_sqlite_install():
@@ -383,10 +385,22 @@ def _give_items_a_currency(workspace_id=None, currency=None):
             "UPDATE appliances_v5 SET currency = ? WHERE workspace_id = ? AND (currency IS NULL OR currency = '')",
             (currency, workspace_id)
         )
+        cursor.execute(
+            '''UPDATE service_history SET currency = ? WHERE (currency IS NULL OR currency = '')
+               AND item_id IN (SELECT id FROM appliances_v5 WHERE workspace_id = ?)''',
+            (currency, workspace_id)
+        )
         return
     cursor.execute('''
         UPDATE appliances_v5 SET currency = COALESCE(
             (SELECT value FROM workspace_settings s WHERE s.workspace_id = appliances_v5.workspace_id AND s.key = 'currency_code'),
+            'INR')
+        WHERE currency IS NULL OR currency = ''
+    ''')
+    cursor.execute('''
+        UPDATE service_history SET currency = COALESCE(
+            (SELECT s.value FROM appliances_v5 a JOIN workspace_settings s ON s.workspace_id = a.workspace_id
+             WHERE a.id = service_history.item_id AND s.key = 'currency_code'),
             'INR')
         WHERE currency IS NULL OR currency = ''
     ''')
@@ -1011,15 +1025,16 @@ def get_inventory_analytics(workspace_id):
     return items, round(total_spent, 2), active_warranties, alerts
 
 
-def add_service_history_entry(item_id, service_date, service_type, vendor='', cost='', notes='', next_service_date=''):
+def add_service_history_entry(item_id, service_date, service_type, vendor='', cost='', notes='', next_service_date='',
+                              currency=None):
     """Callers must check the item belongs to their workspace first (item_exists)."""
     entry_id = insert_returning_id(
         '''
         INSERT INTO service_history (
-            item_id, service_date, service_type, vendor, cost, notes, next_service_date
-        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            item_id, service_date, service_type, vendor, cost, notes, next_service_date, currency
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         ''',
-        (item_id, service_date, service_type, vendor, cost, notes, next_service_date)
+        (item_id, service_date, service_type, vendor, cost, notes, next_service_date, currency)
     )
     conn.commit()
     return entry_id
@@ -1029,7 +1044,7 @@ def get_service_history(item_id):
     """Callers must check the item belongs to their workspace first (item_exists)."""
     cursor.execute(
         '''
-        SELECT id, item_id, service_date, service_type, vendor, cost, notes, next_service_date, created_at
+        SELECT id, item_id, service_date, service_type, vendor, cost, notes, next_service_date, created_at, currency
         FROM service_history
         WHERE item_id = ?
         ORDER BY service_date DESC, id DESC
@@ -1047,7 +1062,8 @@ def get_service_history(item_id):
             'cost': row[5],
             'notes': row[6],
             'next_service_date': row[7],
-            'created_at': row[8]
+            'created_at': row[8],
+            'currency': row[9]
         }
         for row in rows
     ]
@@ -1331,19 +1347,21 @@ def export_workspace_rows(workspace_id):
     """Items and service history of a workspace, for the CSV export."""
     items, _total, _active, _alerts = get_inventory_analytics(workspace_id)
     cursor.execute('''
-        SELECT s.item_id, a.item_name, s.service_date, s.service_type, s.vendor, s.cost, s.notes, s.next_service_date
+        SELECT s.item_id, a.item_name, s.service_date, s.service_type, s.vendor, s.cost, s.currency, s.notes,
+               s.next_service_date
         FROM service_history s JOIN appliances_v5 a ON a.id = s.item_id
         WHERE a.workspace_id = ?
         ORDER BY s.item_id, s.service_date
     ''', (workspace_id,))
-    history = [dict(zip(['item_id', 'item_name', 'service_date', 'service_type', 'vendor', 'cost', 'notes',
+    history = [dict(zip(['item_id', 'item_name', 'service_date', 'service_type', 'vendor', 'cost', 'currency', 'notes',
                          'next_service_date'], row)) for row in cursor.fetchall()]
     return items, history
 
 
 def update_service_history_entry(item_id, entry_id, fields):
     """Callers must check the item belongs to their workspace first (item_exists)."""
-    columns = [c for c in fields if c in ('service_date', 'service_type', 'vendor', 'cost', 'notes', 'next_service_date')]
+    columns = [c for c in fields
+               if c in ('service_date', 'service_type', 'vendor', 'cost', 'currency', 'notes', 'next_service_date')]
     if not columns:
         return False
     cursor.execute(

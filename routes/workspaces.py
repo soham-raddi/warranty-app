@@ -360,7 +360,8 @@ def export_workspace():
         writer.writerow([_csv_safe(item.get(column)) for column in columns])
     writer.writerow([])
     writer.writerow(['Service history'])
-    history_columns = ['item_id', 'item_name', 'service_date', 'service_type', 'vendor', 'cost', 'notes', 'next_service_date']
+    history_columns = ['item_id', 'item_name', 'service_date', 'service_type', 'vendor', 'cost', 'currency', 'notes',
+                       'next_service_date']
     writer.writerow(history_columns)
     for entry in history:
         writer.writerow([_csv_safe(entry.get(column)) for column in history_columns])

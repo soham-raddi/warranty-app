@@ -277,6 +277,7 @@ function truncateText(text, maxLength) {
 }
 
 let activeServiceHistoryItemId = null;
+let activeServiceItemCurrency = null;
 let serviceEntries = [];
 let editingServiceEntryId = null;
 
@@ -302,7 +303,7 @@ function renderServiceTimeline(entries) {
                 </div>
                 <div class="small text-muted mt-1">
                     ${entry.vendor ? `Vendor: ${escapeHtml(entry.vendor)}` : ''}
-                    ${entry.cost ? `${entry.vendor ? ' · ' : ''}Cost: ${escapeHtml(money(entry.cost))}` : ''}
+                    ${entry.cost ? `${entry.vendor ? ' · ' : ''}Cost: ${escapeHtml(money(entry.cost, entry.currency))}` : ''}
                 </div>
                 ${entry.notes ? `<p class="mb-0 mt-2">${escapeHtml(entry.notes)}</p>` : ''}
                 ${entry.next_service_date ? `<div class="small mt-2">Next service: ${escapeHtml(formatPlainDate(entry.next_service_date))}</div>` : ''}
@@ -321,6 +322,9 @@ function setServiceStatus(text, tone = 'muted') {
 function resetServiceForm() {
     editingServiceEntryId = null;
     byId('serviceHistoryForm')?.reset();
+    const currency = byId('serviceCurrency');
+    // New records start in the item's own currency.
+    if (currency) currency.innerHTML = currencyOptions(activeServiceItemCurrency || appSettings.currency_code || 'INR');
     setText('serviceFormTitle', 'Add a service record');
     setText('serviceSubmitLabel', 'Save record');
     byId('serviceCancelEdit')?.classList.add('d-none');
@@ -331,6 +335,7 @@ async function openServiceHistory(itemId, itemName) {
     if (!modalEl) return;
 
     activeServiceHistoryItemId = Number(itemId);
+    activeServiceItemCurrency = (inventoryItems.find(i => Number(i.id) === Number(itemId)) || {}).currency || null;
     setText('serviceHistoryTitle', itemName || 'Item');
     setServiceStatus('');
     resetServiceForm();
@@ -354,6 +359,7 @@ function editServiceEntry(entryId) {
     const fields = { serviceDate: 'service_date', serviceType: 'service_type', serviceVendor: 'vendor', serviceCost: 'cost',
                      serviceNotes: 'notes', serviceNextDate: 'next_service_date' };
     Object.entries(fields).forEach(([id, key]) => { if (byId(id)) byId(id).value = entry[key] || ''; });
+    if (byId('serviceCurrency')) byId('serviceCurrency').innerHTML = currencyOptions(entry.currency || activeServiceItemCurrency || appSettings.currency_code);
     setText('serviceFormTitle', 'Edit service record');
     setText('serviceSubmitLabel', 'Save changes');
     byId('serviceCancelEdit')?.classList.remove('d-none');
@@ -385,7 +391,8 @@ async function saveServiceHistory(event) {
         vendor: value('serviceVendor'),
         cost: value('serviceCost'),
         notes: value('serviceNotes'),
-        next_service_date: value('serviceNextDate')
+        next_service_date: value('serviceNextDate'),
+        currency: value('serviceCurrency')
     };
     const editing = editingServiceEntryId;
     const url = `/api/inventory/${activeServiceHistoryItemId}/service-history${editing ? `/${editing}` : ''}`;

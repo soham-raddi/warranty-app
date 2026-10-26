@@ -366,7 +366,7 @@ def service_history(item_id):
     })
 
 
-def _clean_service_entry(payload):
+def _clean_service_entry(payload, item_id):
     """Validates a service record. Returns (fields, error message)."""
     fields = {
         'service_date': str(payload.get('service_date', '')).strip()[:10],
@@ -376,6 +376,12 @@ def _clean_service_entry(payload):
         'notes': str(payload.get('notes', '')).strip()[:1000],
         'next_service_date': str(payload.get('next_service_date', '')).strip()[:10],
     }
+    # A service is paid in its own currency; without one it's the item's (e.g. a repair abroad).
+    currency = str(payload.get('currency') or '').strip().upper()
+    if currency and not re.fullmatch(r'[A-Z]{3}', currency):
+        return None, 'Currency must be a 3-letter code such as INR or MYR.'
+    fields['currency'] = currency or (get_appliance(g.workspace_id, item_id) or {}).get('currency') \
+        or get_all_settings(g.workspace_id).get('currency_code')
     if not fields['service_date']:
         return None, 'Choose the date of the service.'
     error = _date_error(fields['service_date'], 'Service date', allow_future=False)
@@ -401,7 +407,7 @@ def _clean_service_entry(payload):
 def add_history_entry(item_id):
     if not item_exists(g.workspace_id, item_id):
         return jsonify({'error': 'That item was not found. It may have been deleted.'}), 404
-    fields, error = _clean_service_entry(request.json or request.form or {})
+    fields, error = _clean_service_entry(request.json or request.form or {}, item_id)
     if error:
         return jsonify({'error': error}), 400
     entry_id = add_service_history_entry(item_id=item_id, **fields)
@@ -412,7 +418,7 @@ def add_history_entry(item_id):
 def edit_history_entry(item_id, entry_id):
     if not item_exists(g.workspace_id, item_id):
         return jsonify({'error': 'That item was not found. It may have been deleted.'}), 404
-    fields, error = _clean_service_entry(request.json or {})
+    fields, error = _clean_service_entry(request.json or {}, item_id)
     if error:
         return jsonify({'error': error}), 400
     if not update_service_history_entry(item_id, entry_id, fields):
