@@ -1565,12 +1565,8 @@ async function saveSettings(event) {
     const remindersEnabledInput = byId('settingsRemindersEnabled');
     const reminderDaysInput = byId('settingsReminderDaysBefore');
     const reminderRecipientsInput = byId('settingsReminderRecipients');
-    const themeInput = byId('settingsThemeMode');
-    const accentInput = byId('settingsAccentColor');
     const dateFormatInput = byId('settingsDateFormat');
     const timeFormatInput = byId('settingsTimeFormat');
-    const motionInput = byId('settingsReducedMotion');
-    const densityInput = byId('settingsDensity');
 
     const payload = {
         timezone: timezoneInput ? timezoneInput.value.trim() : 'UTC',
@@ -1581,12 +1577,8 @@ async function saveSettings(event) {
         reminders_enabled: remindersEnabledInput && remindersEnabledInput.checked ? '1' : '0',
         reminder_days_before: reminderDaysInput ? Number(reminderDaysInput.value || 30) : 30,
         reminder_recipients: reminderRecipientsInput ? reminderRecipientsInput.value.trim() : '',
-        theme_mode: themeInput ? themeInput.value : 'system',
-        accent_color: accentInput ? accentInput.value : 'blue',
         date_format: dateFormatInput ? dateFormatInput.value : 'auto',
         time_format: timeFormatInput ? timeFormatInput.value : '12h',
-        reduced_motion: motionInput && motionInput.checked ? '1' : '0',
-        density: densityInput ? densityInput.value : 'comfortable'
     };
 
     try {
@@ -1770,6 +1762,34 @@ document.addEventListener('submit', async (event) => {
 });
 
 byId('serviceHistoryForm')?.addEventListener('submit', saveServiceHistory);
+
+// Appearance is personal: it applies and saves as soon as it changes, for every member.
+byId('appearancePane')?.addEventListener('change', async () => {
+    const choice = {
+        theme_mode: byId('settingsThemeMode')?.value || 'system',
+        accent_color: byId('settingsAccentColor')?.value || 'blue',
+        density: byId('settingsDensity')?.value || 'comfortable',
+        reduced_motion: byId('settingsReducedMotion')?.checked ? '1' : '0',
+    };
+    Object.assign(appSettings, choice);
+    applyUserPreferences();
+    try {
+        const res = await fetch('/api/me/appearance', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(choice)
+        });
+        if (!res.ok) throw new Error();
+        const saved = byId('appearanceSaved');
+        if (saved) {
+            saved.classList.remove('d-none');
+            clearTimeout(saved._hide);
+            saved._hide = setTimeout(() => saved.classList.add('d-none'), 2000);
+        }
+    } catch (e) {
+        showToast('Could not save your appearance. Please try again.', 'danger');
+    }
+});
 byId('settingsForm')?.addEventListener('submit', saveSettings);
 
 window.onload = async () => {

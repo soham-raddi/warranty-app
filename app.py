@@ -20,6 +20,7 @@ import emails
 import inbound
 from config import IS_PRODUCTION, MAX_UPLOAD_BYTES
 from database import (
+    get_appearance,
     accept_pending_invites,
     end_request,
     get_all_settings,
@@ -277,10 +278,7 @@ def inject_current_user():
     workspace_id = g.get('workspace_id')
 
     # Rendered onto <body> so pages arrive with the right theme, accent and density (no flash of defaults).
-    ui = {'theme_mode': 'system', 'accent_color': 'blue', 'density': 'comfortable', 'reduced_motion': '0'}
-    if workspace_id:
-        settings = get_all_settings(workspace_id)
-        ui = {key: settings.get(key, default) for key, default in ui.items()}
+    ui = get_appearance(user['id'] if user else None, workspace_id)
     return {
         'current_user': user,
         'current_workspace': g.get('workspace'),

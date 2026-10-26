@@ -268,6 +268,13 @@ def _schema_statements():
             email_id TEXT PRIMARY KEY,
             created_at TEXT NOT NULL DEFAULT ({now})
         )''',
+        # Each person's own look (theme, accent, spacing, motion), whichever family they're viewing.
+        '''CREATE TABLE IF NOT EXISTS user_preferences (
+            user_id INTEGER NOT NULL,
+            key TEXT NOT NULL,
+            value TEXT NOT NULL,
+            PRIMARY KEY (user_id, key)
+        )''',
         '''CREATE TABLE IF NOT EXISTS schema_meta (
             key TEXT PRIMARY KEY,
             value TEXT NOT NULL
@@ -309,7 +316,7 @@ _ADDED_COLUMNS = [
     ('appliances_v5', 'currency TEXT'),
     ('service_history', 'currency TEXT'),
 ]
-SCHEMA_VERSION = '7'
+SCHEMA_VERSION = '8'
 
 
 def _upgrade_old_sqlite_install():
@@ -1336,6 +1343,7 @@ def delete_user_account(user_id):
         if workspace['role'] == 'owner':
             files += delete_workspace(workspace['id'])
     cursor.execute('DELETE FROM chat_messages WHERE user_id = ?', (user_id,))
+    cursor.execute('DELETE FROM user_preferences WHERE user_id = ?', (user_id,))
     cursor.execute('DELETE FROM workspace_members WHERE user_id = ?', (user_id,))
     cursor.execute('UPDATE workspace_invites SET invited_by = NULL WHERE invited_by = ?', (user_id,))
     cursor.execute('DELETE FROM users WHERE id = ?', (user_id,))
@@ -1577,3 +1585,37 @@ def foreign_currencies_in_use():
     """Currencies on saved items, so the daily job knows whether rates are needed at all."""
     cursor.execute("SELECT DISTINCT currency FROM appliances_v5 WHERE currency IS NOT NULL AND currency != ''")
     return {row[0] for row in cursor.fetchall()}
+
+
+# ---------------------------------------------------------------------------
+# Personal appearance (not shared with the family)
+# ---------------------------------------------------------------------------
+
+APPEARANCE_OPTIONS = {
+    'theme_mode': {'system', 'light', 'dark'},
+    'accent_color': {'blue', 'teal', 'amber', 'rose', 'slate'},
+    'density': {'comfortable', 'compact'},
+    'reduced_motion': {'0', '1'},
+}
+
+
+def get_appearance(user_id, workspace_id=None):
+    """This person's look. Anything they haven't chosen falls back to their family's old shared setting."""
+    defaults = {'theme_mode': 'system', 'accent_color': 'blue', 'density': 'comfortable', 'reduced_motion': '0'}
+    if workspace_id:
+        shared = get_all_settings(workspace_id)
+        defaults = {key: shared.get(key, value) for key, value in defaults.items()}
+    if user_id:
+        cursor.execute('SELECT key, value FROM user_preferences WHERE user_id = ?', (user_id,))
+        defaults.update({key: value for key, value in cursor.fetchall() if key in APPEARANCE_OPTIONS})
+    return defaults
+
+
+def set_appearance(user_id, changes):
+    for key, value in changes.items():
+        cursor.execute(
+            '''INSERT INTO user_preferences (user_id, key, value) VALUES (?, ?, ?)
+               ON CONFLICT (user_id, key) DO UPDATE SET value = excluded.value''',
+            (user_id, key, value)
+        )
+    conn.commit()

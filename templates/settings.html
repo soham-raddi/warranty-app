@@ -18,7 +18,7 @@
             </button>
             <button class="settings-tab" id="tab-appearance-btn" data-bs-toggle="pill" data-bs-target="#tab-appearance" data-tab="appearance" type="button" role="tab" aria-controls="tab-appearance" aria-selected="false">
                 <i class="bi bi-palette"></i>
-                <span><strong>Appearance</strong><small>Theme, color, spacing</small></span>
+                <span><strong>Appearance</strong><small>Your theme, color, spacing</small></span>
             </button>
             <button class="settings-tab" id="tab-alerts-btn" data-bs-toggle="pill" data-bs-target="#tab-alerts" data-tab="alerts" type="button" role="tab" aria-controls="tab-alerts" aria-selected="false">
                 <i class="bi bi-bell"></i>
@@ -141,10 +141,12 @@
             <!-- Appearance -->
             <section class="tab-pane fade" id="tab-appearance" role="tabpanel" aria-labelledby="tab-appearance-btn" tabindex="0">
                 <div class="card section-card shadow-sm">
-                    <fieldset class="settings-pane" data-settings-pane {% if not can_edit %}disabled{% endif %}>
+                    <!-- Personal: everyone can change it, it saves straight away and only affects them. -->
+                    <fieldset class="settings-pane" id="appearancePane">
                         <header class="settings-pane-header">
                             <h2 class="settings-pane-title">Appearance</h2>
-                            <p class="settings-group-note mb-0">How the app looks. Saved changes apply right away.</p>
+                            <p class="settings-group-note mb-0">How the app looks for you. Only your account is changed, and it's saved straight away.
+                                <span class="text-success small ms-1 d-none" id="appearanceSaved"><i class="bi bi-check-lg"></i> Saved</span></p>
                         </header>
 
                         <div class="settings-group">

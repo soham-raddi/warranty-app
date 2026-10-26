@@ -4,6 +4,9 @@ import emails
 import fx
 import reminders
 from database import (
+    APPEARANCE_OPTIONS,
+    get_appearance,
+    set_appearance,
     CURRENCY_SYMBOLS,
     get_all_settings,
     get_workspace,
@@ -33,7 +36,26 @@ def _normalize_toggle(payload, key, default_value='0'):
 
 @settings_bp.route('/api/settings', methods=['GET'])
 def get_settings():
-    return jsonify({'settings': get_all_settings(g.workspace_id)})
+    # Appearance is personal, so the viewer's own choices replace the family's.
+    settings = {**get_all_settings(g.workspace_id), **get_appearance(g.current_user['id'], g.workspace_id)}
+    return jsonify({'settings': settings})
+
+
+@settings_bp.route('/api/me/appearance', methods=['PUT'])
+def update_my_appearance():
+    """Theme, accent colour, spacing and motion are each person's own choice, whatever their role."""
+    payload = request.json or {}
+    changes = {}
+    for key, allowed in APPEARANCE_OPTIONS.items():
+        if key in payload:
+            value = str(payload[key]).strip().lower()
+            if key == 'reduced_motion':
+                value = '1' if value in {'1', 'true', 'yes', 'on'} else '0'
+            if value not in allowed:
+                return jsonify({'error': f"Choose one of: {', '.join(sorted(allowed))}."}), 400
+            changes[key] = value
+    set_appearance(g.current_user['id'], changes)
+    return jsonify({'appearance': get_appearance(g.current_user['id'], g.workspace_id)})
 
 
 @settings_bp.route('/api/settings', methods=['PUT'])
@@ -45,12 +67,8 @@ def update_settings():
     if not timezone:
         return jsonify({'error': 'Choose a time zone from the list.'}), 400
     currency_code = str(payload.get('currency_code', 'INR')).strip().upper() or 'INR'
-    theme_mode = _pick_option(payload, 'theme_mode', 'system', {'system', 'light', 'dark'})
-    accent_color = _pick_option(payload, 'accent_color', 'blue', {'blue', 'teal', 'amber', 'rose', 'slate'})
     date_format = _pick_option(payload, 'date_format', 'auto', {'auto', 'iso', 'dmy', 'mdy', 'long'})
     time_format = _pick_option(payload, 'time_format', '12h', {'12h', '24h'})
-    density = _pick_option(payload, 'density', 'comfortable', {'comfortable', 'compact'})
-    reduced_motion = _normalize_toggle(payload, 'reduced_motion', '0')
     reminders_enabled = _normalize_toggle(payload, 'reminders_enabled', '0')
 
     try:
@@ -75,16 +93,10 @@ def update_settings():
         return jsonify({'error': 'currency_code must be a supported currency'}), 400
     currency_symbol = CURRENCY_SYMBOLS[currency_code]
 
-    if not theme_mode:
-        return jsonify({'error': 'theme_mode must be system, light, or dark'}), 400
-    if not accent_color:
-        return jsonify({'error': 'accent_color must be blue, teal, amber, rose, or slate'}), 400
     if not date_format:
         return jsonify({'error': 'date_format must be auto, iso, dmy, mdy, or long'}), 400
     if not time_format:
         return jsonify({'error': 'time_format must be 12h or 24h'}), 400
-    if not density:
-        return jsonify({'error': 'density must be comfortable or compact'}), 400
     if expiry_alert_days > 3650:
         return jsonify({'error': 'expiry_alert_days must be between 0 and 3650'}), 400
     if reminder_days_before > 3650:
@@ -107,12 +119,8 @@ def update_settings():
     set_setting_value(g.workspace_id, 'currency_code', currency_code)
     set_setting_value(g.workspace_id, 'currency_symbol', currency_symbol)
     set_setting_value(g.workspace_id, 'warranty_period_days', warranty_period_days)
-    set_setting_value(g.workspace_id, 'theme_mode', theme_mode)
-    set_setting_value(g.workspace_id, 'accent_color', accent_color)
     set_setting_value(g.workspace_id, 'date_format', date_format)
     set_setting_value(g.workspace_id, 'time_format', time_format)
-    set_setting_value(g.workspace_id, 'reduced_motion', reduced_motion)
-    set_setting_value(g.workspace_id, 'density', density)
     set_setting_value(g.workspace_id, 'expiry_alert_days', expiry_alert_days)
     set_setting_value(g.workspace_id, 'reminders_enabled', reminders_enabled)
     set_setting_value(g.workspace_id, 'reminder_days_before', reminder_days_before)
