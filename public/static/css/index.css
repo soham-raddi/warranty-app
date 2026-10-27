@@ -2048,3 +2048,10 @@ body[data-theme="dark"] .dashboard-hero .page-subtitle,
 #dash-alerts:not(.show-all) .attention-item:nth-child(n + 7) {
     display: none;
 }
+
+/* Fields changed by reading a receipt again */
+.form-control.is-suggested,
+.form-select.is-suggested {
+    background-color: rgba(var(--brand-rgb), 0.08);
+    border-color: var(--brand);
+}

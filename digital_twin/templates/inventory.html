@@ -1,0 +1,193 @@
+{% extends 'base.html' %}
+
+{% block title %}Inventory | Digital Twin{% endblock %}
+
+{% block content %}
+<section class="page-hero mb-4">
+    <h1 class="page-title">Inventory</h1>
+    <p class="page-subtitle">Everything you've bought, with its receipt, warranty and service history.</p>
+</section>
+
+<section class="row g-3 mb-4">
+    <div class="col-6">
+        <div class="card stat-card bg-primary p-4 shadow-sm">
+            <h6>Total spent</h6>
+            <h1 id="s-tot" class="fw-bold">—</h1>
+            <i class="bi bi-wallet2"></i>
+        </div>
+    </div>
+    <div class="col-6">
+        <div class="card stat-card bg-success p-4 shadow-sm">
+            <h6>Active warranties</h6>
+            <h1 id="s-act" class="fw-bold">0</h1>
+            <i class="bi bi-shield-check"></i>
+        </div>
+    </div>
+</section>
+
+<section class="card section-card shadow-sm border-0">
+    <div class="inventory-toolbar">
+        <div class="inventory-search">
+            <i class="bi bi-search" aria-hidden="true"></i>
+            <input id="invSearch" type="search" class="form-control" placeholder="Search name, brand, store, serial…" aria-label="Search inventory">
+        </div>
+        <select id="invCategory" class="form-select" aria-label="Filter by category">
+            <option value="">All categories</option>
+        </select>
+        <select id="invStatus" class="form-select" aria-label="Filter by warranty">
+            <option value="">All warranties</option>
+            <option value="Active">Active</option>
+            <option value="Expiring Soon">Expiring soon</option>
+            <option value="Expired">Expired</option>
+            <option value="Unknown">Unknown</option>
+        </select>
+        <select id="invSort" class="form-select" aria-label="Sort by">
+            <option value="newest">Newest first</option>
+            <option value="oldest">Oldest first</option>
+            <option value="expiry">Warranty ending soonest</option>
+            <option value="amount">Highest amount</option>
+            <option value="name">Name A–Z</option>
+        </select>
+    </div>
+    <div class="inventory-count small text-muted" id="invCount" aria-live="polite"></div>
+    <div class="card-body p-0">
+        <div class="table-responsive">
+            <table class="table table-hover mb-0 align-middle inventory-table">
+                <thead class="bg-light">
+                    <tr>
+                        <th class="ps-4">Item</th>
+                        <th class="d-none d-md-table-cell">Purchased</th>
+                        <th class="text-end">Amount</th>
+                        <th>Warranty</th>
+                        <th class="text-end pe-3"><span class="visually-hidden">Actions</span></th>
+                    </tr>
+                </thead>
+                <tbody id="invTable"></tbody>
+            </table>
+        </div>
+        <p class="small text-muted px-4 py-2 mb-0 border-top">* Uses the default warranty period from Settings. Attach the warranty card, or choose Edit, to set the exact length.</p>
+    </div>
+</section>
+
+<div class="modal fade" id="editItemModal" tabindex="-1" aria-labelledby="editItemModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered modal-dialog-scrollable modal-lg">
+        <form class="modal-content border-0 shadow" id="editItemForm">
+            <div class="modal-header">
+                <h5 class="modal-title" id="editItemModalLabel"><i class="bi bi-pencil-square"></i> Edit item</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <p class="small text-muted">Correct anything the scan got wrong. Changes are visible to everyone in this workspace.</p>
+                <div class="alert alert-info small py-2 d-none" id="editSuggestedNote" role="status"></div>
+                <div class="row g-3">
+                    <div class="col-md-8">
+                        <label class="form-label fw-semibold" for="editItemName">Item name</label>
+                        <input id="editItemName" name="item_name" class="form-control" maxlength="200" required>
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label fw-semibold" for="editBrand">Brand</label>
+                        <input id="editBrand" name="brand" class="form-control" maxlength="100">
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label fw-semibold" for="editPurchaseDate">Purchase date</label>
+                        <input id="editPurchaseDate" name="date_of_purchase" type="date" class="form-control">
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label fw-semibold" for="editWarrantyMonths">Warranty length (months)</label>
+                        <input id="editWarrantyMonths" name="warranty_months" type="number" min="1" max="360" class="form-control" placeholder="Default">
+                        <div class="form-text">Leave empty to use the workspace default.</div>
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label fw-semibold" for="editTotal">Amount</label>
+                        <div class="input-group">
+                            <input id="editTotal" name="total_amount" class="form-control" inputmode="decimal" maxlength="40">
+                            <select id="editCurrency" name="currency" class="form-select edit-currency" aria-label="Currency"></select>
+                        </div>
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label fw-semibold" for="editCategory">Category</label>
+                        <input id="editCategory" name="category" class="form-control" maxlength="100">
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label fw-semibold" for="editStore">Store</label>
+                        <input id="editStore" name="store_name" class="form-control" maxlength="200">
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label fw-semibold" for="editModel">Model number</label>
+                        <input id="editModel" name="model_number" class="form-control" maxlength="100">
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label fw-semibold" for="editSerial">Serial number</label>
+                        <input id="editSerial" name="serial_number" class="form-control" maxlength="100">
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label fw-semibold" for="editInvoice">Invoice number</label>
+                        <input id="editInvoice" name="invoice_number" class="form-control" maxlength="100">
+                    </div>
+                    <div class="col-12">
+                        <label class="form-label fw-semibold" for="editWarrantyInfo">Warranty notes</label>
+                        <textarea id="editWarrantyInfo" name="warranty_info" class="form-control" rows="2" maxlength="500"></textarea>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="submit" class="btn btn-primary">Save changes</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<div class="modal fade" id="serviceHistoryModal" tabindex="-1" aria-labelledby="serviceHistoryModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered modal-dialog-scrollable modal-lg">
+        <div class="modal-content border-0 shadow">
+            <div class="modal-header">
+                <div>
+                    <h5 class="modal-title" id="serviceHistoryModalLabel"><i class="bi bi-clock-history"></i> Service history</h5>
+                    <div class="small text-muted" id="serviceHistoryTitle"></div>
+                </div>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <div id="serviceHistoryList" class="mb-4"></div>
+
+                <h6 class="fw-semibold mb-3" id="serviceFormTitle">Add a service record</h6>
+                <form id="serviceHistoryForm" class="row g-3">
+                    <div class="col-md-6">
+                        <label class="form-label" for="serviceDate">Service date</label>
+                        <input id="serviceDate" type="date" class="form-control" required>
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label" for="serviceType">Service type</label>
+                        <input id="serviceType" type="text" class="form-control" placeholder="Repair, cleaning, battery replacement..." maxlength="120" required>
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label" for="serviceVendor">Vendor</label>
+                        <input id="serviceVendor" type="text" class="form-control" maxlength="120">
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label" for="serviceCost">Cost</label>
+                        <div class="input-group">
+                            <input id="serviceCost" type="text" inputmode="decimal" class="form-control" maxlength="40">
+                            <select id="serviceCurrency" class="form-select edit-currency" aria-label="Currency"></select>
+                        </div>
+                    </div>
+                    <div class="col-12">
+                        <label class="form-label" for="serviceNotes">Notes</label>
+                        <textarea id="serviceNotes" class="form-control" rows="2" maxlength="1000"></textarea>
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label" for="serviceNextDate">Next service due</label>
+                        <input id="serviceNextDate" type="date" class="form-control">
+                    </div>
+                    <div class="col-md-6 d-flex align-items-end gap-2">
+                        <button type="button" class="btn btn-outline-secondary d-none" id="serviceCancelEdit" data-action="cancel-service-edit">Cancel</button>
+                        <button type="submit" class="btn btn-primary flex-grow-1"><i class="bi bi-check-lg"></i> <span id="serviceSubmitLabel">Save record</span></button>
+                    </div>
+                </form>
+                <p id="serviceHistoryStatus" class="small mt-3 mb-0 text-muted"></p>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

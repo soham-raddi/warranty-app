@@ -877,19 +877,26 @@ function renderInventoryRow(i) {
     const expiry = i.warranty_expires_on
         ? `<small class="text-muted text-nowrap" title="${usesDefault ? 'Using the default warranty period' : `${Number(i.warranty_months)}-month warranty`}">until ${escapeHtml(formatPlainDate(i.warranty_expires_on))}${usesDefault ? ' *' : ''}</small>`
         : '';
+    // The card's actions sit right under the warranty, not only in the menu.
     const card = hasCard
-        ? `<a href="/files/warranty-card/${itemId}" target="_blank" class="inventory-card-link" title="View warranty card"><i class="bi bi-file-earmark-check"></i> Card</a>`
-        : `<button type="button" class="btn btn-link inventory-card-link p-0" data-action="attach-card" data-item-id="${itemId}" title="Attach the warranty card"><i class="bi bi-plus-circle"></i> Card</button>`;
+        ? `<span class="d-inline-flex flex-wrap gap-2">
+               <a href="/files/warranty-card/${itemId}" target="_blank" class="inventory-card-link" title="View warranty card"><i class="bi bi-file-earmark-check"></i> Card</a>
+               <button type="button" class="btn btn-link inventory-card-link p-0" data-action="reread-card" data-item-id="${itemId}" title="Read the warranty card again to update the warranty length"><i class="bi bi-arrow-repeat"></i> Read again</button>
+           </span>`
+        : `<button type="button" class="btn btn-link inventory-card-link p-0" data-action="attach-card" data-item-id="${itemId}" title="Attach the warranty card"><i class="bi bi-plus-circle"></i> Add card</button>`;
+    // Viewing and re-reading live in the row; the menu only has what the row doesn't.
     const cardMenu = hasCard
-        ? `<li><a class="dropdown-item" href="/files/warranty-card/${itemId}" target="_blank"><i class="bi bi-file-earmark-check"></i> View warranty card</a></li>
-           <li><button type="button" class="dropdown-item" data-action="reread-card" data-item-id="${itemId}"><i class="bi bi-arrow-repeat"></i> Read card again</button></li>
-           <li><button type="button" class="dropdown-item" data-action="attach-card" data-item-id="${itemId}"><i class="bi bi-upload"></i> Replace card</button></li>`
-        : `<li><button type="button" class="dropdown-item" data-action="attach-card" data-item-id="${itemId}"><i class="bi bi-upload"></i> Attach warranty card</button></li>`;
+        ? `<li><button type="button" class="dropdown-item" data-action="attach-card" data-item-id="${itemId}"><i class="bi bi-upload"></i> Replace warranty card</button></li>`
+        : '';
     return `
     <tr>
         <td class="ps-4">
             <div class="fw-semibold inventory-name" title="${name}">${name}</div>
-            ${subline ? `<small class="text-muted">${subline}</small>` : ''}
+            ${subline ? `<small class="text-muted d-block">${subline}</small>` : ''}
+            <span class="d-inline-flex flex-wrap gap-2">
+                <a href="/files/receipt/${itemId}" target="_blank" class="inventory-card-link" title="View the receipt"><i class="bi bi-receipt"></i> Receipt</a>
+                <button type="button" class="btn btn-link inventory-card-link p-0" data-action="reread-receipt" data-item-id="${itemId}" title="Read the receipt again and check what changed"><i class="bi bi-arrow-repeat"></i> Read again</button>
+            </span>
         </td>
         <td class="d-none d-md-table-cell text-nowrap">
             ${escapeHtml(formatPlainDate(i.date_of_purchase) || 'Unknown')}
@@ -909,10 +916,7 @@ function renderInventoryRow(i) {
                 <ul class="dropdown-menu dropdown-menu-end shadow-sm">
                     <li><button type="button" class="dropdown-item" data-action="edit-item" data-item-id="${itemId}"><i class="bi bi-pencil"></i> Edit details</button></li>
                     <li><button type="button" class="dropdown-item" data-action="service-history" data-item-id="${itemId}" data-item-name="${name}"><i class="bi bi-clock-history"></i> Service history</button></li>
-                    <li><hr class="dropdown-divider"></li>
-                    <li><a class="dropdown-item" href="/files/receipt/${itemId}" target="_blank"><i class="bi bi-receipt"></i> View receipt</a></li>
                     <li><a class="dropdown-item" href="/files/receipt/${itemId}" download><i class="bi bi-download"></i> Download receipt</a></li>
-                    <li><hr class="dropdown-divider"></li>
                     ${cardMenu}
                     ${canManageWorkspace() ? `<li><hr class="dropdown-divider"></li>
                     <li><button type="button" class="dropdown-item text-danger" data-action="delete-item" data-item-id="${itemId}"><i class="bi bi-trash"></i> Delete item</button></li>` : ''}
@@ -931,6 +935,18 @@ function initInventoryFilters() {
 function clearInventoryFilters() {
     ['invSearch', 'invCategory', 'invStatus'].forEach(id => { if (byId(id)) byId(id).value = ''; });
     renderInventory();
+}
+
+async function rereadReceipt(id) {
+    showToast('Reading the receipt again…', 'info');
+    try {
+        const res = await fetch(`/api/inventory/${Number(id)}/read-receipt`, { method: 'POST' });
+        const data = await readJsonResponse(res);
+        if (!res.ok) return showToast(data.error || 'Could not read the receipt.', 'danger');
+        await openEditItem(id, data.fields || {});
+    } catch (e) {
+        showToast('Could not read the receipt.', 'danger');
+    }
 }
 
 async function rereadWarrantyCard(id) {
@@ -1655,6 +1671,9 @@ document.addEventListener('click', (event) => {
         case 'reread-card':
             rereadWarrantyCard(itemId);
             break;
+        case 'reread-receipt':
+            rereadReceipt(itemId);
+            break;
         case 'edit-service':
             editServiceEntry(Number(target.dataset.entryId));
             break;
@@ -1815,7 +1834,7 @@ window.onload = async () => {
 // ---- Edit item ----
 let editingItemId = null;
 
-async function openEditItem(itemId) {
+async function openEditItem(itemId, suggested = null) {
     const modalEl = byId('editItemModal');
     if (!modalEl) return;
     try {
@@ -1830,6 +1849,28 @@ async function openEditItem(itemId) {
             if (field.name) field.value = data.item[field.name] ?? '';
         });
         if (form.elements.total_amount) form.elements.total_amount.value = tidyAmount(data.item.total_amount);
+        form.querySelectorAll('.is-suggested').forEach(field => field.classList.remove('is-suggested'));
+        const note = byId('editSuggestedNote');
+        let changed = 0;
+        if (suggested) {
+            Object.entries(suggested).forEach(([name, value]) => {
+                const field = form.elements[name];
+                if (!field) return;
+                const text = name === 'total_amount' ? tidyAmount(value) : String(value);
+                if (name === 'currency' && ![...field.options].some(o => o.value === text)) return;
+                if (String(field.value ?? '') !== text) {
+                    field.value = text;
+                    field.classList.add('is-suggested');
+                    changed += 1;
+                }
+            });
+        }
+        if (note) {
+            note.classList.toggle('d-none', !suggested);
+            note.textContent = !suggested ? '' : changed
+                ? `Read again from the receipt: ${changed} field${changed === 1 ? '' : 's'} changed (highlighted). Check them, then save.`
+                : 'Read again from the receipt: nothing new was found. Everything already matches.';
+        }
         bootstrap.Modal.getOrCreateInstance(modalEl).show();
     } catch (e) {
         showToast(e.message, 'danger');

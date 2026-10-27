@@ -172,21 +172,35 @@ Upgrading from a version without workspaces is automatic: existing data becomes 
 ```
 python -m unittest discover -s tests -v
 ```
-The tests use a throwaway database, never read `.env` and never call Groq. They check that families cannot see or
-change each other's data, plus security (cross-site requests, headers, rate limits, dev login in production),
-item editing, exports and account deletion. To run them against Postgres, set `TEST_DATABASE_URL` to an **empty,
+The tests use a throwaway database, never read `.env` and never call Groq, Resend or the exchange-rate service. Each
+file covers one area (workspaces, security and data, receipts, email import, currencies and so on), and
+`tests/helpers.py` holds the shared setup. To run them against Postgres, set `TEST_DATABASE_URL` to an **empty,
 throwaway** database (it is wiped first).
 
-### Project Architecture
-* **app.py:** The main Flask server. It routes web traffic, handles API requests from the frontend, and manages file uploads.
-
-* **llm_extractor.py:** The extraction engine. It handles image compression, PDF slicing, and formats the strict multimodal prompts sent to Groq's Vision API to turn messy documents into clean JSON.
-
-* **chatbot.py:** The conversational brain. It manages chat history, formats overall database statistics, and dynamically attaches receipt images to the prompt if the user mentions a specific item.
-
-* **database.py:** Manages the local SQLite database creation (currently v5), data insertions, deletions, and active warranty analytics.
-
-**templates/index.html:** The single-page frontend UI, featuring Bootstrap 5 styling, interactive tabs, and a rich post-upload summary modal.
+### Project Structure
+```
+app.py                   Starts the app (Vercel serves it; locally: python app.py)
+digital_twin/
+    __init__.py          Creates the Flask app: security headers, sign-in checks, error pages
+    config.py            Settings that depend on where the app runs (local or Vercel)
+    db/                  The database, one file per topic (SQLite locally, Postgres on Supabase)
+        connection.py    Connections, and translating SQL for Postgres
+        schema.py        Creating and upgrading tables
+        users.py  workspaces.py  items.py  chat.py  settings.py  mail.py  currency.py  ratelimits.py
+    services/            The work behind the pages
+        ai.py            Reading receipts, warranty cards and order emails with Groq
+        chatbot.py       The assistant
+        emails.py        Sending email (Resend)
+        inbound.py       Receiving forwarded order emails
+        reminders.py     Warranty reminder emails
+        fx.py            Exchange rates
+        storage.py       Receipt files (local uploads/ folder or Supabase Storage)
+        ratelimit.py     Rate limits
+    routes/              The pages and API, one file per area
+    templates/           HTML pages
+public/                  Static files Vercel serves directly (CSS, JavaScript, icons, manifest)
+tests/                   One file per area, plus helpers.py
+```
 
 ### How to Use
 * **Upload Tab:** Select a receipt image or PDF and click "Scan receipt". The AI reads every product on it (fees like delivery are left out), then shows a review screen to fix anything and untick what you don't want before saving. Items already in your inventory are unticked automatically.
