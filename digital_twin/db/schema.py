@@ -190,7 +190,7 @@ _ADDED_COLUMNS = [
 ]
 
 
-SCHEMA_VERSION = '9'
+SCHEMA_VERSION = '10'
 
 
 def _upgrade_old_sqlite_install():
@@ -251,6 +251,8 @@ def init_schema():
         _upgrade_old_sqlite_install()
     for statement in _INDEXES:
         cursor.execute(statement)
+    if IS_POSTGRES:
+        _enable_row_level_security()
     _give_items_a_currency()
     cursor.execute(
         '''INSERT INTO schema_meta (key, value) VALUES ('version', ?)
@@ -258,6 +260,22 @@ def init_schema():
         (SCHEMA_VERSION,)
     )
     conn.commit()
+
+
+def _enable_row_level_security():
+    """Supabase also serves every public table through its Data API, where anyone with the project's public key could
+    read or change it. Row-level security with no policies blocks that API completely. The app is unaffected: it
+    connects as the tables' owner, and owners skip these checks. Tables this login doesn't own are left alone unless
+    it can bypass row-level security, so the app can never lock itself out."""
+    cursor.execute('SELECT rolbypassrls FROM pg_roles WHERE rolname = current_user')
+    row = cursor.fetchone()
+    bypasses = bool(row and row[0])
+    cursor.execute('''
+        SELECT tablename FROM pg_tables
+        WHERE schemaname = 'public' AND NOT rowsecurity AND (tableowner = current_user OR ?)
+    ''', (bypasses,))
+    for (table,) in cursor.fetchall():
+        cursor.execute(f'ALTER TABLE public."{table}" ENABLE ROW LEVEL SECURITY')
 
 
 def _give_items_a_currency(workspace_id=None, currency=None):
